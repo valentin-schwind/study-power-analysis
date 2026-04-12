@@ -67,5 +67,4 @@ No build step is required. Open `index.html` in a browser or serve the folder wi
 ## Notes for contributors
 
 - The UI is intentionally dependency-light.
-- `testdata/` and the local Superpower source are not meant to ship in the public repository.
 - Please preserve the browser API surface used by the site, especially `window.StudyPowerEngine`.
