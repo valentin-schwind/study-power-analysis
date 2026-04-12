@@ -72,16 +72,19 @@ No build step is required. Open `index.html` in a browser or serve the folder wi
 ## Citation
 
 ```bibtex
-@inproceedings{schwind2023a,
+@inproceedings{10.1145/3544549.3585890,
 	author = {Schwind, Valentin and Resch, Stefan and Sehrt, Jessica},
 	title = {The HCI User Studies Toolkit: Supporting Study Designing and Planning for Undergraduates and Novice Researchers in Human-Computer Interaction},
 	year = {2023},
-	isbn = {978-1-4503-9422-2/23/04},
+	isbn = {9781450394222},
 	publisher = {Association for Computing Machinery},
 	address = {New York, NY, USA},
 	url = {https://doi.org/10.1145/3544549.3585890},
 	doi = {10.1145/3544549.3585890},
-	booktitle = {Extended Abstracts of the 2020 CHI Conference on Human Factors in Computing Systems},
+	booktitle = {Extended Abstracts of the 2023 CHI Conference on Human Factors in Computing Systems},
+	articleno = {272},
+	numpages = {7},
+	keywords = {HCI Toolkit, Organization, Study Design Planning, User Studies},
 	location = {Hamburg, Germany},
 	series = {CHI EA '23}
 }
