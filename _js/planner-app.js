@@ -1,21 +1,22 @@
 (() => {
 'use strict';
-let debug = false; // Flag for enabling debug mode
-		let IVs = 0; // Counter for Independent Variables (IVs)
-		let DVs = 0; // Counter for Dependent Variables (DVs) 
-		let manualSampleSizeUpdate = false; // Flag for manual subject update
-		let serverANOVARequestRunning = false; // Flag for ANOVA request status
-		let serverRegressionRequestRunning = false; // Flag for regression request status
-		let serverRequestRunning = false; // Flag for SAMPLE request status
-		let studyDesign; // Object to hold study design details
-		let sampleSize = 0; // Variable to store sample size
-		let sampleSizeReady = false; // Flag for completed sample size estimation
-		let lastAnovaPowerResult = null;
-		let lastRegressionPowerResult = null;
-		let lastTTestPowerResult = null;
-		let powerChartInstance = null;
-		let plannerUpdateSuspended = false;
-		const simulations = 24;
+	let debug = false;
+	let IVs = 0;
+	let DVs = 0;
+	let manualSampleSizeUpdate = false;
+	let serverANOVARequestRunning = false;
+	let serverRegressionRequestRunning = false;
+	let serverRequestRunning = false;
+	let studyDesign;
+	let sampleSize = 0;
+	let sampleSizeReady = false;
+	let lastAnovaPowerResult = null;
+	let lastRegressionPowerResult = null;
+	let lastTTestPowerResult = null;
+	let powerChartInstance = null;
+	let plannerUpdateSuspended = false;
+	let refreshPlanner = function() {};
+	const simulations = 24;
 	
 		// Resets study design to its initial state
 		function resetStudyDesign() {
@@ -99,7 +100,21 @@ let debug = false; // Flag for enabling debug mode
 		}
 
 		function isTTestScenario() {
-			return hasNominalFactors() && studyDesign.nonOrdinalIVs.length === 0 && studyDesign.DVs.length === 1 && studyDesign.IVs.length === 1 && studyDesign.IVs[0].type === "N" && studyDesign.IVs[0].levels.length === 2;
+			let nominalIVs = studyDesign.IVs.filter(function(iv) {
+				return iv.type === "N";
+			});
+			let betweenCells = studyDesign.betweenConditions && studyDesign.betweenConditions.length ? studyDesign.betweenConditions.length : 1;
+			let withinCells = studyDesign.withinConditions && studyDesign.withinConditions.length ? studyDesign.withinConditions.length : 1;
+			let totalConditions = Math.max(1, betweenCells * withinCells);
+			let onlyBetweenNominal = studyDesign.withinIVs.length === 0 && studyDesign.betweenIVs.length === 1 && studyDesign.betweenIVs[0].levels.length === 2;
+			let onlyWithinNominal = studyDesign.betweenIVs.length === 0 && studyDesign.withinIVs.length === 1 && studyDesign.withinIVs[0].levels.length === 2;
+
+			return hasNominalFactors() &&
+				studyDesign.nonOrdinalIVs.length === 0 &&
+				studyDesign.DVs.length === 1 &&
+				nominalIVs.length === 1 &&
+				totalConditions === 2 &&
+				(onlyBetweenNominal || onlyWithinNominal);
 		}
 
 		function getPrimaryAnalysisKind() {
@@ -172,9 +187,425 @@ let debug = false; // Flag for enabling debug mode
 			result.label = paired ? "Paired t-test" : "Independent t-test";
 			return result;
 		}
+
+		function normalizeLevelValue(level) {
+			return $.trim(String(level || "")).replaceAll(" ", "");
+		}
+
+		function deserializeLevels(levelString) {
+			return String(levelString || "")
+				.split(",")
+				.map(function(level) {
+					return normalizeLevelValue(level);
+				})
+				.filter(function(level) {
+					return level !== "";
+				});
+		}
+
+		function serializeLevels(levels) {
+			return (levels || []).map(function(level) {
+				return normalizeLevelValue(level);
+			}).filter(function(level) {
+				return level !== "";
+			}).join(", ");
+		}
+
+		function getCurrentLevelTokens() {
+			return deserializeLevels($("input[name='enterLevelsIV']").val());
+		}
+
+		function renderLevelTokens() {
+			let tokenList = $("#levelsTokenList");
+			let levels = getCurrentLevelTokens();
+
+			tokenList.empty();
+			levels.forEach(function(level, index) {
+				tokenList.append(
+					'<span class="level-token">' +
+						'<span class="level-token-label">' + level + '</span>' +
+						'<button type="button" class="btn btn-sm level-token-remove" data-level-index="' + index + '" aria-label="Remove level ' + level + '">' +
+							'<i class="bi bi-x-lg"></i>' +
+						'</button>' +
+					'</span>'
+				);
+			});
+		}
+
+		function setFieldValidationState(selector, isValid, messageSelector, message) {
+			let field = $(selector);
+			let feedback = messageSelector ? $(messageSelector) : $();
+
+			field.toggleClass("is-invalid", !isValid);
+
+			if(feedback.length > 0) {
+				if(message) {
+					feedback.text(message);
+				}
+
+				feedback.toggle(!isValid);
+			}
+		}
+
+		function clearFieldValidationState(selector, messageSelector) {
+			let field = $(selector);
+			let feedback = messageSelector ? $(messageSelector) : $();
+
+			field.removeClass("is-invalid");
+
+			if(feedback.length > 0) {
+				feedback.hide();
+			}
+		}
+
+		function validateVariableName(value, itemLabel) {
+			let trimmedValue = $.trim(String(value || ""));
+
+			if(trimmedValue === "") {
+				return itemLabel + " name is required.";
+			}
+
+			return "";
+		}
+
+		function validateCurrentIVInputs(showErrors) {
+			let nameError = validateVariableName($("input[name='nameIV']").val(), "IV");
+			let levels = getCurrentLevelTokens();
+			let hasDuplicateLevels = levels.some(function(level, index) {
+				return levels.findIndex(function(otherLevel) {
+					return normalizeLevelValue(otherLevel).toLowerCase() === normalizeLevelValue(level).toLowerCase();
+				}) !== index;
+			});
+			let needsLevels = $("select[name='selectIVType']").val() === "N";
+			let levelsError = "";
+
+			if(needsLevels && levels.length < 2) {
+				levelsError = "Please add at least two unique levels.";
+			} else if(needsLevels && hasDuplicateLevels) {
+				levelsError = "Level names must be unique.";
+			}
+
+			if(showErrors) {
+				setFieldValidationState("input[name='nameIV']", nameError === "", "#ivNameFeedback", nameError || "Please enter a valid IV name.");
+				$("#levelsTokenShell").toggleClass("is-invalid", levelsError !== "");
+				$("#ivLevelsFeedback").text(levelsError || "Please add at least two unique levels.").toggle(levelsError !== "");
+			}
+
+			return nameError === "" && levelsError === "";
+		}
+
+		function validateCurrentDVInputs(showErrors) {
+			let nameError = validateVariableName($("input[name='nameDV']").val(), "DV");
+
+			if(showErrors) {
+				setFieldValidationState("input[name='nameDV']", nameError === "", "#dvNameFeedback", nameError || "Please enter a valid DV name.");
+			}
+
+			return nameError === "";
+		}
+
+		function setCurrentLevelTokens(levels) {
+			$("input[name='enterLevelsIV']").val(serializeLevels(levels));
+			renderLevelTokens();
+		}
+
+		function addLevelToken(levelValue) {
+			let normalizedLevel = normalizeLevelValue(levelValue);
+			let levels = getCurrentLevelTokens();
+
+			if(normalizedLevel === "") {
+				$("#levelsTokenInput").val("");
+				return;
+			}
+
+			if(levels.some(function(level) {
+				return normalizeLevelValue(level).toLowerCase() === normalizedLevel.toLowerCase();
+			})) {
+				$("#levelsTokenInput").val("");
+				return;
+			}
+
+			levels.push(normalizedLevel);
+			setCurrentLevelTokens(levels);
+			$("#levelsTokenInput").val("");
+			clearFieldValidationState("input[name='nameIV']", "#ivNameFeedback");
+			$("#levelsTokenShell").removeClass("is-invalid");
+			$("#ivLevelsFeedback").hide();
+		}
+
+		function syncLevelTokensFromSerializedInput() {
+			setCurrentLevelTokens(deserializeLevels($("input[name='enterLevelsIV']").val()));
+		}
+
+		function clearLevelTokens() {
+			setCurrentLevelTokens([]);
+			$("#levelsTokenInput").val("");
+			$("#levelsTokenShell").removeClass("is-invalid");
+			$("#ivLevelsFeedback").hide();
+		}
+
+		function getIVTypeLabel(typeValue) {
+			let labels = {
+				N: "Nominal",
+				O: "Ordinal",
+				I: "Interval",
+				R: "Ratio"
+			};
+
+			return labels[typeValue] || typeValue;
+		}
+
+		function escapeHtml(value) {
+			return String(value == null ? "" : value)
+				.replaceAll("&", "&amp;")
+				.replaceAll("<", "&lt;")
+				.replaceAll(">", "&gt;")
+				.replaceAll('"', "&quot;")
+				.replaceAll("'", "&#39;");
+		}
+
+		function updateVariableActionState() {
+			if(studyDesign.IVs.length > 2) {
+				$("#addIV").addClass("disabled");
+			} else {
+				$("#addIV").removeClass("disabled");
+			}
+
+			if(studyDesign.DVs.length > 3) {
+				$("#addDV").addClass("disabled");
+			} else {
+				$("#addDV").removeClass("disabled");
+			}
+		}
+
+		function buildSelectOptions(options, selectedValue) {
+			return options.map(function(option) {
+				let isSelected = option.value === selectedValue ? " selected" : "";
+				return '<option value="' + escapeHtml(option.value) + '"' + isSelected + '>' + escapeHtml(option.label) + '</option>';
+			}).join("");
+		}
+
+		function buildSelectionItem(item, listType) {
+			let itemId = item.id;
+			let isIV = listType === "iv";
+			let metadata = [];
+			let typeConfigHtml = "";
+			let designConfigHtml = "";
+
+			if(isIV) {
+				typeConfigHtml = '<div class="selection-field"><label class="selection-field-label">IV type</label><select class="form-select form-select-sm selection-inline-select iv-type-select" data-item-id="' + itemId + '">' +
+					buildSelectOptions([
+						{ value: "N", label: "Nominal" },
+						{ value: "O", label: "Ordinal" },
+						{ value: "I", label: "Interval" },
+						{ value: "R", label: "Ratio" }
+					], item.type) +
+				'</select></div>';
+				designConfigHtml = item.type === "N" ? '<div class="selection-field"><label class="selection-field-label">IV design</label><select class="form-select form-select-sm selection-inline-select iv-within-select" data-item-id="' + itemId + '">' +
+					buildSelectOptions([
+						{ value: "within", label: "within" },
+						{ value: "between", label: "between" }
+					], item.within) +
+				'</select></div>' : '<div class="selection-field selection-field-empty"></div>';
+			}
+
+			if(!isIV) {
+				typeConfigHtml = '<div class="selection-field"><label class="selection-field-label">DV type</label><select class="form-select form-select-sm selection-inline-select dv-type-select" data-item-id="' + itemId + '">' +
+					buildSelectOptions([
+						{ value: "O", label: "Ordinal" },
+						{ value: "I", label: "Interval" },
+						{ value: "R", label: "Ratio" }
+					], item.type) +
+				'</select></div>';
+				designConfigHtml = '';
+			}
+
+			return '<li class="selection-item" draggable="true" data-list-type="' + listType + '" data-item-id="' + itemId + '">' +
+				'<div class="selection-card' + (isIV ? ' selection-card-iv' : ' selection-card-dv') + '">' +
+					'<div class="selection-card-main selection-card-primary">' +
+						'<div class="selection-copy">' +
+							'<div class="selection-title-row">' +
+								'<span class="selection-icon">' + getDataTypeIcon(item.type) + '</span>' +
+								'<textarea rows="1" class="form-control form-control-sm selection-name-input" data-list-type="' + listType + '" data-item-id="' + itemId + '" aria-label="' + (isIV ? 'Independent variable name' : 'Dependent variable name') + '">' + escapeHtml(item.name) + '</textarea>' +
+							'</div>' +
+							'<div class="selection-meta">' + metadata.map(function(entry) {
+								return '<span class="selection-badge">' + escapeHtml(entry) + '</span>';
+							}).join("") + '</div>' +
+						'</div>' +
+					'</div>' +
+					(typeConfigHtml ? '<div class="selection-card-main selection-card-config">' + typeConfigHtml + '</div>' : '') +
+					(designConfigHtml ? '<div class="selection-card-main selection-card-config">' + designConfigHtml + '</div>' : '') +
+					'<div class="selection-actions">' +
+						'<button type="button" class="btn btn-outline-secondary btn-sm selection-move-up" data-list-type="' + listType + '" data-item-id="' + itemId + '" aria-label="Move ' + escapeHtml(item.name) + ' up">' +
+							'<i class="bi bi-arrow-up"></i>' +
+						'</button>' +
+						'<button type="button" class="btn btn-outline-secondary btn-sm selection-move-down" data-list-type="' + listType + '" data-item-id="' + itemId + '" aria-label="Move ' + escapeHtml(item.name) + ' down">' +
+							'<i class="bi bi-arrow-down"></i>' +
+						'</button>' +
+						'<button type="button" id="button' + (isIV ? 'IV' : 'DV') + '_' + itemId + '" class="btn btn-outline-danger btn-sm selection-remove" data-list-type="' + listType + '" data-item-id="' + itemId + '" aria-label="Remove ' + escapeHtml(item.name) + '">' +
+							'<i class="bi bi-trash"></i>' +
+						'</button>' +
+					'</div>' +
+					(isIV && item.type === "N" ? '<div class="selection-card-levels">' +
+						'<label class="selection-field-label">Levels</label>' +
+						'<div class="selection-levels">' + (item.levels || []).map(function(level, index) {
+							let removeDisabled = (item.levels || []).length <= 2 ? " disabled" : "";
+							return '<span class="selection-level-chip">' + escapeHtml(level) + '<button type="button" class="btn btn-sm selection-level-remove" data-item-id="' + itemId + '" data-level-index="' + index + '" aria-label="Remove level ' + escapeHtml(level) + '"' + removeDisabled + '><i class="bi bi-x-lg"></i></button></span>';
+						}).join("") + '</div>' +
+						'<input type="text" class="form-control form-control-sm selection-level-input mt-2" data-item-id="' + itemId + '" placeholder="Add level and press Enter" />' +
+					'</div>' : '') +
+				'</div>' +
+			'</li>';
+		}
+
+		function renderVariableLists() {
+			$("#listIV").html(studyDesign.IVs.map(function(item) {
+				return buildSelectionItem(item, "iv");
+			}).join(""));
+			$("#listDV").html(studyDesign.DVs.map(function(item) {
+				return buildSelectionItem(item, "dv");
+			}).join(""));
+			$("#listIV .selection-name-input, #listDV .selection-name-input").each(function() {
+				adjustSelectionNameInputHeight(this);
+			});
+			updateVariableActionState();
+		}
+
+		function adjustSelectionNameInputHeight(element) {
+			if(!element) {
+				return;
+			}
+
+			element.style.height = "auto";
+			element.style.height = Math.max(32, element.scrollHeight) + "px";
+		}
+
+		function getVariableArray(listType) {
+			return listType === "iv" ? studyDesign.IVs : studyDesign.DVs;
+		}
+
+		function removeVariableById(listType, itemId) {
+			let items = getVariableArray(listType);
+			let removeIndex = items.findIndex(function(item) {
+				return String(item.id) === String(itemId);
+			});
+
+			if(removeIndex === -1) {
+				return;
+			}
+
+			items.splice(removeIndex, 1);
+			renderVariableLists();
+			showSoftWaitState();
+			displayDependentVariableInput();
+
+			if(listType === "dv") {
+				resetSampleSizeProgress();
+			}
+		}
+
+		function moveVariableByOffset(listType, itemId, offset) {
+			let items = getVariableArray(listType);
+			let currentIndex = items.findIndex(function(item) {
+				return String(item.id) === String(itemId);
+			});
+
+			if(currentIndex === -1) {
+				return;
+			}
+
+			let nextIndex = currentIndex + offset;
+
+			if(nextIndex < 0 || nextIndex >= items.length) {
+				return;
+			}
+
+			let movedItem = items.splice(currentIndex, 1)[0];
+			items.splice(nextIndex, 0, movedItem);
+			renderVariableLists();
+			showSoftWaitState();
+			refreshPlanner();
+		}
+
+		function moveVariableToTarget(listType, draggedItemId, targetItemId, insertAfter) {
+			let items = getVariableArray(listType);
+			let draggedIndex = items.findIndex(function(item) {
+				return String(item.id) === String(draggedItemId);
+			});
+			let targetIndex = items.findIndex(function(item) {
+				return String(item.id) === String(targetItemId);
+			});
+
+			if(draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) {
+				return;
+			}
+
+			let draggedItem = items.splice(draggedIndex, 1)[0];
+			let adjustedTargetIndex = items.findIndex(function(item) {
+				return String(item.id) === String(targetItemId);
+			});
+			let insertIndex = insertAfter ? adjustedTargetIndex + 1 : adjustedTargetIndex;
+
+			items.splice(insertIndex, 0, draggedItem);
+			renderVariableLists();
+			showSoftWaitState();
+			refreshPlanner();
+		}
+
+		function updateVariableAndRefresh(updateFn) {
+			updateFn();
+			renderVariableLists();
+			showSoftWaitState();
+			refreshPlanner();
+		}
+
+		function addLevelToExistingIV(itemId, rawLevel) {
+			let normalizedLevel = normalizeLevelValue(rawLevel);
+			let targetItem = studyDesign.IVs.find(function(item) {
+				return String(item.id) === String(itemId);
+			});
+
+			if(!targetItem || targetItem.type !== "N" || normalizedLevel === "") {
+				return;
+			}
+
+			targetItem.levels = targetItem.levels || [];
+
+			if(targetItem.levels.some(function(level) {
+				return normalizeLevelValue(level).toLowerCase() === normalizedLevel.toLowerCase();
+			})) {
+				return;
+			}
+
+			targetItem.levels.push(normalizedLevel);
+			updateVariableAndRefresh(function() {});
+		}
+
+		function removeLevelFromExistingIV(itemId, levelIndex) {
+			let targetItem = studyDesign.IVs.find(function(item) {
+				return String(item.id) === String(itemId);
+			});
+
+			if(!targetItem || !Array.isArray(targetItem.levels)) {
+				return;
+			}
+
+			if(levelIndex < 0 || levelIndex >= targetItem.levels.length) {
+				return;
+			}
+
+			if(targetItem.levels.length <= 2) {
+				return;
+			}
+
+			targetItem.levels.splice(levelIndex, 1);
+			updateVariableAndRefresh(function() {});
+		}
 		 
 		$(document).ready(function() { 
 			resetStudyDesign();
+			renderVariableLists();
+			syncLevelTokensFromSerializedInput();
 			updateSectionVisibility();
 
 			$("#IVForm").on("submit", function(event) {
@@ -210,7 +641,9 @@ let debug = false; // Flag for enabling debug mode
 			
 			$("input[name='nameDV']").attr('placeholder', "Enter DV name...");
 			$("input[name='enterLevelsIV']").attr('placeholder', "Enter levels (comma-separated)");
+			$("#levelsTokenInput").attr('placeholder', "Type a level and press Enter");
 			$("input[name='nameIV']").attr('placeholder', "Enter IV name..."); 
+			$("#ivNameFeedback, #dvNameFeedback, #ivLevelsFeedback").hide();
 			
 			$("select[name='selectIVType']").append(new Option('Please select', ""));
             $("select[name='selectIVType']").append(new Option('Nominal (types, categories, gender, animals, ZIP codes,...)', "N")); 
@@ -226,8 +659,8 @@ let debug = false; // Flag for enabling debug mode
 			$("select[name='selectDVType'] option[value='N']").attr("disabled","disabled");    
 			
 			$("select[name='selectIVwithin']").append(new Option('Please select', ""));
-			$("select[name='selectIVwithin']").append(new Option('within-subject (subjects are all assigned to this IV)', "within"));
-			$("select[name='selectIVwithin']").append(new Option('between-subject (subjects are separated into groups)', "between"));
+			$("select[name='selectIVwithin']").append(new Option('within', "within"));
+			$("select[name='selectIVwithin']").append(new Option('between', "between"));
 			
 			$("input[name='manovaCheckBox']").prop( 'checked', false ); 			
 			
@@ -239,11 +672,216 @@ let debug = false; // Flag for enabling debug mode
 				if($("select[name='selectIVType']").val() == "N"){
 					$("#levelsIV").show();
 					$("#withinIV").show();
+					syncLevelTokensFromSerializedInput();
 				} else {
 					$("#levelsIV").hide();
 					$("#withinIV").hide();
+					clearLevelTokens();
 				}
+				clearFieldValidationState("input[name='nameIV']", "#ivNameFeedback");
+				$("#levelsTokenShell").removeClass("is-invalid");
+				$("#ivLevelsFeedback").hide();
 			});	
+
+			$("input[name='nameIV']").on("input", function() {
+				if($.trim($(this).val()) !== "") {
+					clearFieldValidationState(this, "#ivNameFeedback");
+				}
+			});
+
+			$("input[name='nameDV']").on("input", function() {
+				if($.trim($(this).val()) !== "") {
+					clearFieldValidationState(this, "#dvNameFeedback");
+				}
+			});
+
+			$("#levelsTokenInput").on("keydown", function(event) {
+				if(event.key === "Enter" || event.key === ",") {
+					event.preventDefault();
+					addLevelToken($(this).val());
+				}
+			});
+
+			$("#levelsTokenInput").on("blur", function() {
+				addLevelToken($(this).val());
+			});
+
+			$("#levelsTokenList").on("click", ".level-token-remove", function() {
+				let levels = getCurrentLevelTokens();
+				let levelIndex = parseInt($(this).data("level-index"), 10);
+
+				if(levelIndex >= 0 && levelIndex < levels.length) {
+					levels.splice(levelIndex, 1);
+					setCurrentLevelTokens(levels);
+				}
+			});
+
+			$("#listIV, #listDV").on("click", ".selection-remove", function() {
+				removeVariableById($(this).data("list-type"), $(this).data("item-id"));
+			});
+
+			$("#listIV, #listDV").on("click", ".selection-move-up", function() {
+				moveVariableByOffset($(this).data("list-type"), $(this).data("item-id"), -1);
+			});
+
+			$("#listIV, #listDV").on("click", ".selection-move-down", function() {
+				moveVariableByOffset($(this).data("list-type"), $(this).data("item-id"), 1);
+			});
+
+			$("#listIV, #listDV").on("input", ".selection-name-input", function() {
+				let listType = $(this).data("list-type");
+				let itemId = $(this).data("item-id");
+				let nextName = $.trim($(this).val());
+				let items = getVariableArray(listType);
+				let targetItem = items.find(function(item) {
+					return String(item.id) === String(itemId);
+				});
+
+				adjustSelectionNameInputHeight(this);
+				$(this).toggleClass("is-invalid", nextName === "");
+
+				if(!targetItem || nextName === "") {
+					return;
+				}
+
+				if(targetItem.name === nextName) {
+					return;
+				}
+
+				targetItem.name = nextName;
+				showSoftWaitState();
+				refreshPlanner();
+			});
+
+			$("#listIV, #listDV").on("keydown", ".selection-name-input", function(event) {
+				if(event.key === "Enter") {
+					event.preventDefault();
+				}
+			});
+
+			$("#listIV").on("change", ".iv-within-select", function() {
+				let itemId = $(this).data("item-id");
+				let nextValue = $(this).val();
+				let targetItem = studyDesign.IVs.find(function(item) {
+					return String(item.id) === String(itemId);
+				});
+
+				if(!targetItem || targetItem.within === nextValue) {
+					return;
+				}
+
+				targetItem.within = nextValue;
+				renderVariableLists();
+				showSoftWaitState();
+				refreshPlanner();
+			});
+
+			$("#listIV").on("change", ".iv-type-select", function() {
+				let itemId = $(this).data("item-id");
+				let nextValue = $(this).val();
+				let targetItem = studyDesign.IVs.find(function(item) {
+					return String(item.id) === String(itemId);
+				});
+
+				if(!targetItem || targetItem.type === nextValue) {
+					return;
+				}
+
+				targetItem.type = nextValue;
+
+				if(nextValue === "N") {
+					targetItem.within = targetItem.within === "between" ? "between" : "within";
+					targetItem.levels = targetItem.levels && targetItem.levels.length >= 2 ? targetItem.levels.slice(0, Math.max(2, targetItem.levels.length)) : ["Level1", "Level2"];
+				} else {
+					targetItem.within = "within";
+					targetItem.levels = [];
+				}
+
+				renderVariableLists();
+				showSoftWaitState();
+				refreshPlanner();
+			});
+
+			$("#listDV").on("change", ".dv-type-select", function() {
+				let itemId = $(this).data("item-id");
+				let nextValue = $(this).val();
+				let targetItem = studyDesign.DVs.find(function(item) {
+					return String(item.id) === String(itemId);
+				});
+
+				if(!targetItem || targetItem.type === nextValue) {
+					return;
+				}
+
+				targetItem.type = nextValue;
+				renderVariableLists();
+				showSoftWaitState();
+				refreshPlanner();
+			});
+
+			$("#listIV").on("click", ".selection-level-remove", function() {
+				removeLevelFromExistingIV($(this).data("item-id"), parseInt($(this).data("level-index"), 10));
+			});
+
+			$("#listIV").on("keydown", ".selection-level-input", function(event) {
+				if(event.key === "Enter" || event.key === ",") {
+					event.preventDefault();
+					addLevelToExistingIV($(this).data("item-id"), $(this).val());
+					$(this).val("");
+				}
+			});
+
+			$("#listIV, #listDV").on("dragstart", ".selection-item", function(event) {
+				let dragEvent = event.originalEvent;
+
+				$(".selection-item").removeClass("drag-over drag-over-after");
+				$(this).addClass("dragging");
+				dragEvent.dataTransfer.effectAllowed = "move";
+				dragEvent.dataTransfer.setData("text/plain", JSON.stringify({
+					listType: $(this).data("list-type"),
+					itemId: $(this).data("item-id")
+				}));
+			});
+
+			$("#listIV, #listDV").on("dragover", ".selection-item", function(event) {
+				let dragEvent = event.originalEvent;
+				let bounds = this.getBoundingClientRect();
+				let insertAfter = (dragEvent.clientY - bounds.top) > (bounds.height / 2);
+
+				event.preventDefault();
+				$(".selection-item").removeClass("drag-over drag-over-after");
+				$(this).addClass(insertAfter ? "drag-over-after" : "drag-over");
+			});
+
+			$("#listIV, #listDV").on("dragleave", ".selection-item", function() {
+				$(this).removeClass("drag-over drag-over-after");
+			});
+
+			$("#listIV, #listDV").on("drop", ".selection-item", function(event) {
+				let payload = null;
+				let bounds = this.getBoundingClientRect();
+				let insertAfter = (event.originalEvent.clientY - bounds.top) > (bounds.height / 2);
+
+				event.preventDefault();
+
+				try {
+					payload = JSON.parse(event.originalEvent.dataTransfer.getData("text/plain"));
+				} catch (error) {
+					payload = null;
+				}
+
+				$(".selection-item").removeClass("drag-over drag-over-after dragging");
+
+				if(!payload || payload.listType !== $(this).data("list-type")) {
+					return;
+				}
+
+				moveVariableToTarget(payload.listType, payload.itemId, $(this).data("item-id"), insertAfter);
+			});
+
+			$("#listIV, #listDV").on("dragend", ".selection-item", function() {
+				$(".selection-item").removeClass("drag-over drag-over-after dragging");
+			});
 			
 			$("input[name='manovaCheckBox']").change(function() { 
 				refreshPlanner();
@@ -320,15 +958,10 @@ let debug = false; // Flag for enabling debug mode
 				$("#targetPowerInputId").val("0.80");
 				$("#targetPowerOutputId").val("80 %");
 
+				$("#effectSizeModeHint").hide().text("");
+
 				if (effectMode === "d") {
 					$("#effectSizeInputId").val($("#effectSizeInputId").val() || "0.500");
-					$("#effectSizeModeHint").text("Cohen's d is exact for the paired and independent two-condition tests. For multifactor ANOVAs it is shown as a two-condition reference contrast.");
-				} else if (effectMode === "eta") {
-					$("#effectSizeModeHint").text("Partial eta squared defines the omnibus ANOVA effect directly.");
-				} else if (effectMode === "f") {
-					$("#effectSizeModeHint").text("Cohen's f defines the omnibus ANOVA effect directly and is closest to the G-Power reference exports.");
-				} else {
-					$("#effectSizeModeHint").text("The planner derives a reference contrast effect from the current min/max mean difference and pooled SD.");
 				}
 			}
 
@@ -345,18 +978,17 @@ let debug = false; // Flag for enabling debug mode
 				IVs++;
 				$("input[name='nameIV']").prop("required", true); 
 				$("select[name='selectIVType']").prop("required", true); 		
+				syncLevelTokensFromSerializedInput();
 				
-				if($("input[name='nameIV']").val() == "") return;
+				if(!validateCurrentIVInputs(true)) return;
 				if($("select[name='selectIVType']").val() == "") return;
 				
 				if($("select[name='selectIVType']").val() == "N") {
-					if($('input[name="enterLevelsIV"]').val() == "") return; 
+					if(getCurrentLevelTokens().length < 2) return; 
 				} else { 
 					$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
 				}
 				
-				let iconIVstr = "";
-				let levelsIVstr = ""; 
 				let levels = [ ];
 				let IV = {
 					"id": 0,
@@ -364,42 +996,16 @@ let debug = false; // Flag for enabling debug mode
 					"type": "",
 					"levels": [],
 					"within": "" };
-					
-				iconIVstr += getDataTypeIcon($("select[name='selectIVType']").val()); 
 								
 				if($("select[name='selectIVType']").val() == "N") {
 					$("#withinIV").show();
 					$("#levelsIV").show();  
-					levels = $('input[name="enterLevelsIV"]').val().split(',');
-					
-					if(levels){
-						levelsIVstr = '<ul class="list-group list-group-horizontal">';
-						$.each(levels, function(i){
-							levelsIVstr += '<small><li class="list-group-item">' + levels[i] + '</li></small>'; 
-							levels[i] = $.trim(levels[i]).replaceAll(" ","");
-						});
-						levelsIVstr += '</ul>';
-						IV.levels = levels; 
-					} 					
+					levels = getCurrentLevelTokens();
+					IV.levels = levels; 					
 				} else {
 					$("#levelsIV").hide();
 					$("#withinIV").hide();
 				}
-				
-				$("#listIV").append('<button type="button" id="buttonIV_' + IVs + '" class="btn btn-light me-1 mt-1"  style="vertical-align: top;">' + iconIVstr + $("input[name='nameIV']").val() + ' (' + $("select[name='selectIVwithin']").val() + ') <i class="bi ms-1 bi-x"" c></i>' + levelsIVstr + '</button>');
-				
-				$("#buttonIV_" + IVs).click(function(){  						
-					let removeItem;
-					let myNumber = this.id.split('_')[1];
-					$.each(studyDesign.IVs, function(i){
-						if(studyDesign.IVs[i].id == myNumber) removeItem = i; 
-					});
-					studyDesign.IVs.splice(removeItem, 1); 
-					$(this).remove();   
-					clearOutputAndWait();
-					displayDependentVariableInput();  
-					$("#addIV").removeClass('disabled'); 
-				});
 								
 				IV.id = IVs;
 				IV.name = $("input[name='nameIV']").val();
@@ -407,20 +1013,18 @@ let debug = false; // Flag for enabling debug mode
 				IV.within = $("select[name='selectIVwithin']").val();
 				
 				studyDesign.IVs.push(IV); 
+				renderVariableLists();
 				
 				$("input[name='nameIV']").val("");
 				$("select[name='selectIVType'] option:eq(0)").prop("selected", true);
 				$("select[name='selectIVwithin'] option:eq(0)").prop("selected", true);
-				$('input[name="enterLevelsIV"]').val("")
+				clearLevelTokens();
 					
 				$("#levelsIV").hide();
 				$("#withinIV").hide();	
 
-				clearOutputAndWait();
+				showSoftWaitState();
 				displayDependentVariableInput();	
- 
-				if(studyDesign.IVs.length > 2)  $("#addIV").addClass('disabled'); 
-				else $("#addIV").removeClass('disabled');					
 			});
 			
 			function displayDependentVariableInput(){  	
@@ -456,7 +1060,7 @@ let debug = false; // Flag for enabling debug mode
 				}	 	 
 				
 				if(studyDesign.DVs.length > 0 && studyDesign.IVs.length > 0){  
-					$("#cellEffectMode").show();
+					$("#cellEffectMode").hide();
 					$("#cellVariance").show();
 					$("#cellEffectSize").show();
 					$("#cellDeltaMeans").show();
@@ -485,7 +1089,7 @@ let debug = false; // Flag for enabling debug mode
 				$("input[name='nameDV']").prop("required", true); 
 				$("select[name='selectDVType']").prop("required", true); 
 				
-				if($("input[name='nameDV']").val() == "") return;
+				if(!validateCurrentDVInputs(true)) return;
 				if($("select[name='selectDVType']").val() == "") return;
 			
 				let iconDVstr = "";
@@ -494,40 +1098,19 @@ let debug = false; // Flag for enabling debug mode
 					"name": "",
 					"type": "" };
 				DVs++;
-				iconDVstr += getDataTypeIcon($("select[name='selectDVType']").val()); 
-				
-				$("#listDV").append('<button type="button" id="buttonDV_' + DVs + '" class="btn btn-light me-1 mt-1 ">' + iconDVstr + $("input[name='nameDV']").val() + '<i class="bi ms-1 bi-x "></i></button>');
-				
-				$("#buttonDV_" + DVs).click(function(){ 
-					let removeItem;
-					let myNumber = this.id.split('_')[1];
-					
-					$.each(studyDesign.DVs, function(i){
-						if(studyDesign.DVs[i].id == myNumber) removeItem = i; 
-					}); 
-					
-					studyDesign.DVs.splice(removeItem, 1); 
-					$(this).remove();  
-					clearOutputAndWait();
-					displayDependentVariableInput();  
-					$("#addDV").removeClass('disabled');  
-				});
 				
 				DV.id = DVs;
 				DV.name = $("input[name='nameDV']").val();
 				DV.type = $("select[name='selectDVType']").val(); 
 				studyDesign.DVs.push(DV); 
+				renderVariableLists();
 				
 				$("input[name='nameDV']").val("");
 				$("select[name='selectDVType'] option:eq(0)").prop("selected", true); 
 				resetSampleSizeProgress();
+				showSoftWaitState();
 				refreshPlanner();
 				
-				if(studyDesign.DVs.length > 3) {
-					$("#addDV").addClass('disabled'); 
-				} else {
-					$("#addDV").removeClass('disabled');
-				}	 
 				$("#rowWAIT").text("Please wait..."); 
 			$("#rowWAITContainer").show();
 				$("#cellVariance").show();
@@ -535,7 +1118,7 @@ let debug = false; // Flag for enabling debug mode
 				$("#cellEffectSize").show();
 			}); 
 			 
-			function refreshPlanner(){ 
+			refreshPlanner = function() { 
 				if(plannerUpdateSuspended) {
 					return;
 				}
@@ -551,7 +1134,7 @@ let debug = false; // Flag for enabling debug mode
 				updateSectionVisibility();
 				  
 				if(studyDesign.DVs.length > 0 && studyDesign.IVs.length > 0) recomputePlanner();	 
-			}
+			};
 				
 			function recomputePlanner() {  
 				let anIVHasMoreThanTwoLevels = false;
@@ -636,8 +1219,8 @@ let debug = false; // Flag for enabling debug mode
 
 			try {
 				resetStudyDesign();
-				$('[id*=buttonDV_]').each(function() { $(this).click(); });
-				$('[id*=buttonIV_]').each(function() { $(this).click(); });
+				renderVariableLists();
+				clearLevelTokens();
 				setupCallback();
 			} finally {
 				plannerUpdateSuspended = false;
@@ -651,7 +1234,8 @@ let debug = false; // Flag for enabling debug mode
 			let cohensD = effectSizes.cohensD.toFixed(3);
 			let cohensF = effectSizes.cohensF.toFixed(3);
 			let partialEtaSq = effectSizes.partialEtaSquared.toFixed(3);
-			let text = "Cohen's <i>d</i> = " + cohensD + " <i>(" + interpretCohensd(parseFloat(cohensD)) + ")</i>, Cohen's <i>f</i> = " + cohensF + " <i>(" + interpretCohensf(parseFloat(cohensF)) + ")</i>, <i>&eta;<sub>p</sub><sup>2</sup></i> = " + partialEtaSq + " <i>(" + interpretPartialEtaSquared(parseFloat(partialEtaSq)) + ")</i>";
+			let sharedInterpretation = interpretCohensf(parseFloat(cohensF));
+			let text = "<strong>" + sharedInterpretation + " effect</strong><br />Cohen's <i>d</i> = " + cohensD + ", Cohen's <i>f</i> = " + cohensF + ", <i>&eta;<sub>p</sub><sup>2</sup></i> = " + partialEtaSq;
 
 			if (hasNominalFactors()) {
 				text += "<br /><small>" + effectSizes.note + "</small>";
@@ -903,22 +1487,18 @@ let debug = false; // Flag for enabling debug mode
 		}  
 		
 		function clearOutputAndWait() {
-			resetSampleSizeProgress();
-			destroyPowerChart();
-
 			if(studyDesign.IVs.length > 0 && studyDesign.DVs.length > 0) {
 				$("#rowWAIT").text("Please wait..."); 
-			$("#rowWAITContainer").show();
-				$("#rowES").hide();
-				$("#rowST").hide(); 
-				$("#rowED").hide(); 
+				$("#rowWAITContainer").show();
 				$("#cellMANOVA").hide();
 				if($("#sampleSizeSlider").is(":hidden")) $("#sampleSizePleaseWait").show();
 				else  $("#sampleSizePleaseWait").hide();
 				$("#cellSampleSize").show(); 
 			} else {
 				$("#rowWAIT").text("No study design possible..."); 
-			$("#rowWAITContainer").show();
+				$("#rowWAITContainer").show();
+				resetSampleSizeProgress();
+				destroyPowerChart();
 				$("#rowES").hide();
 				$("#rowST").hide(); 
 				$("#rowED").hide(); 
@@ -930,6 +1510,13 @@ let debug = false; // Flag for enabling debug mode
 				$("#cellTargetPower").hide();
 				$("#cellWithinCorrelation").hide();
 				$("#cellDeltaMeans").hide();
+			}
+		}
+
+		function showSoftWaitState() {
+			if(studyDesign.IVs.length > 0 && studyDesign.DVs.length > 0) {
+				$("#rowWAIT").text("Please wait...");
+				$("#rowWAITContainer").show();
 			}
 		}
 		
@@ -966,13 +1553,13 @@ let debug = false; // Flag for enabling debug mode
 			if(studyDesign.withinIVs.length > 0) {   
 				resultStr += '<div class="accordion-item" id="accordionWithin"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWithin" aria-controls="accordionWithin"><h6 class="accordion-header">' + getDataTypeIcon("M") + ' Sequence of conditions for your within-subject IVs (conditions to which <i>all</i> subjects are exposed to)</h6></button><div id="collapseWithin" class="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#accordionWithin"><div class="accordion-body bg-light">';
 				if(studyDesign.withinConditions.length <= 3) { 
-					resultStr += "To avoid sequence effects order the " + studyDesign.withinConditions.length + " conditions of your within-subject IVs into <i>permutations</i>. Repeat the permutations with a multiple of " + permutations(studyDesign.withinConditions).length + ". For example with " + (permutations(studyDesign.withinConditions).length * 2) + ", " +  (permutations(studyDesign.withinConditions).length * 3) + ", " +  (permutations(studyDesign.withinConditions).length * 4) + "... subjects." + arrayToDesignSequence(studyDesign.withinConditions, "permutations") + ""; 
+					resultStr += "To avoid sequence effects order the " + studyDesign.withinConditions.length + " conditions of your within-subject IVs into <i>permutations</i>. Repeat the permutations with a multiple of " + permutations(studyDesign.withinConditions).length + ". For example with " + (permutations(studyDesign.withinConditions).length * 2) + ", " +  (permutations(studyDesign.withinConditions).length * 3) + ", " +  (permutations(studyDesign.withinConditions).length * 4) + "... subjects.<div class=\"mt-3\">" + arrayToDesignSequence(studyDesign.withinConditions, "permutations") + "</div>"; 
 				}
 				if(studyDesign.withinConditions.length > 3 && studyDesign.withinConditions.length <= 12) { 
-					resultStr += "To avoid sequence effects order the " + studyDesign.withinConditions.length + " conditions of your within-subject IVs using a <i>" + studyDesign.withinConditions.length + " &times; " + studyDesign.withinConditions.length + " balanced Latin Square</i>. Repeat the Latin Square with a multiple of " + (studyDesign.withinConditions.length) + ". For example with " + (studyDesign.withinConditions.length * 2) + ", " +  (studyDesign.withinConditions.length * 3) + ", " +  (studyDesign.withinConditions.length * 4) + "... subjects." + arrayToDesignSequence(studyDesign.withinConditions, "latinSquare") + "";
+					resultStr += "To avoid sequence effects order the " + studyDesign.withinConditions.length + " conditions of your within-subject IVs using a <i>" + studyDesign.withinConditions.length + " &times; " + studyDesign.withinConditions.length + " balanced Latin Square</i>. Repeat the Latin Square with a multiple of " + (studyDesign.withinConditions.length) + ". For example with " + (studyDesign.withinConditions.length * 2) + ", " +  (studyDesign.withinConditions.length * 3) + ", " +  (studyDesign.withinConditions.length * 4) + "... subjects.<div class=\"mt-3\">" + arrayToDesignSequence(studyDesign.withinConditions, "latinSquare") + "</div>";
 				}
 				if(studyDesign.withinConditions.length > 12) { 
-					resultStr += "To avoid sequence effects put the " + studyDesign.withinConditions.length + " following conditions into a <i>pseudo-randomized order</i>. For example: " + arrayToDesignSequence(studyDesign.withinConditions, "shuffle", studyDesign.samples) ; 
+					resultStr += "To avoid sequence effects put the " + studyDesign.withinConditions.length + " following conditions into a <i>pseudo-randomized order</i>. For example:<div class=\"mt-3\">" + arrayToDesignSequence(studyDesign.withinConditions, "shuffle", studyDesign.samples) + "</div>"; 
 				}  
 				resultStr += "</div></div></div>";
 			} 
@@ -1603,23 +2190,19 @@ let debug = false; // Flag for enabling debug mode
 		}
 
 		function buildConsistentCurvePoints(curvePoints, requiredN, requiredRows) {
-			let normalizedPoints = dedupeAndSortCurvePoints(curvePoints);
+			let points = (curvePoints || []).slice();
 
-			if(Array.isArray(requiredRows) && requiredRows.length > 0 && isFinite(requiredN)) {
-				let hasRequiredPoint = normalizedPoints.some(function(point) {
-					return point.totalParticipants === requiredN;
+			// Keep the analytical curve intact, but ensure the currently reported
+			// Required N is present as an explicit point so the reference line and
+			// tooltip logic can align with the table below.
+			if(isFinite(requiredN) && Array.isArray(requiredRows) && requiredRows.length > 0) {
+				points.push({
+					totalParticipants: Number(requiredN),
+					rows: requiredRows
 				});
-
-				if(!hasRequiredPoint) {
-					normalizedPoints.push({
-						totalParticipants: requiredN,
-						rows: requiredRows
-					});
-					normalizedPoints = dedupeAndSortCurvePoints(normalizedPoints);
-				}
 			}
 
-			return normalizedPoints;
+			return dedupeAndSortCurvePoints(points);
 		}
 
 		function getChartTickStep(values) {
@@ -1640,7 +2223,55 @@ let debug = false; // Flag for enabling debug mode
 			return minStep || 1;
 		}
 
-		function renderPowerChart(canvasId, curvePoints, highlightedN, requiredN, targetPower) {
+		function createLegendLineSymbol(color, dashPattern, vertical) {
+			let symbolCanvas = document.createElement("canvas");
+			symbolCanvas.width = 18;
+			symbolCanvas.height = 18;
+			let symbolContext = symbolCanvas.getContext("2d");
+
+			if(!symbolContext) {
+				return symbolCanvas;
+			}
+
+			symbolContext.strokeStyle = color;
+			symbolContext.lineWidth = 2;
+			symbolContext.setLineDash(dashPattern || []);
+			symbolContext.lineCap = "round";
+			symbolContext.beginPath();
+
+			if(vertical) {
+				symbolContext.moveTo(9, 2);
+				symbolContext.lineTo(9, 16);
+			} else {
+				symbolContext.moveTo(2, 9);
+				symbolContext.lineTo(16, 9);
+			}
+
+			symbolContext.stroke();
+			return symbolCanvas;
+		}
+
+		function createLegendSquareSymbol(fillColor, strokeColor) {
+			let symbolCanvas = document.createElement("canvas");
+			symbolCanvas.width = 18;
+			symbolCanvas.height = 18;
+			let symbolContext = symbolCanvas.getContext("2d");
+
+			if(!symbolContext) {
+				return symbolCanvas;
+			}
+
+			symbolContext.fillStyle = fillColor;
+			symbolContext.strokeStyle = strokeColor || fillColor;
+			symbolContext.lineWidth = 1;
+			symbolContext.beginPath();
+			symbolContext.rect(3, 3, 12, 12);
+			symbolContext.fill();
+			symbolContext.stroke();
+			return symbolCanvas;
+		}
+
+		function renderPowerChart(canvasId, curvePoints, highlightedN, highlightedPower, requiredN, targetPower) {
 			let canvas = document.getElementById(canvasId);
 			let context = null;
 
@@ -1663,6 +2294,10 @@ let debug = false; // Flag for enabling debug mode
 			let labels = normalizedCurvePoints.map(function(point) { return point.totalParticipants; });
 			let tickStepSize = getChartTickStep(labels);
 			let effectLabels = [];
+			let targetY = roundTo(targetPower * 100, 1);
+			let highlightedY = isFinite(highlightedPower) ? roundTo(highlightedPower * 100, 1) : null;
+			let minX = labels.length ? Math.min.apply(null, labels.concat([highlightedN, requiredN].filter(isFinite))) : Math.min(highlightedN || 0, requiredN || 0);
+			let maxX = labels.length ? Math.max.apply(null, labels.concat([highlightedN, requiredN].filter(isFinite))) : Math.max(highlightedN || 1, requiredN || 1);
 
 			$(normalizedCurvePoints).each(function(_, point) {
 				$(point.rows).each(function(__, row) {
@@ -1691,9 +2326,7 @@ let debug = false; // Flag for enabling debug mode
 
 			datasets.push({
 				label: "Target power",
-				data: labels.map(function(value) {
-					return { x: value, y: roundTo(targetPower * 100, 1) };
-				}),
+				data: [{ x: minX, y: targetY }, { x: maxX, y: targetY }],
 				borderColor: "#111827",
 				borderDash: [6, 4],
 				pointRadius: 0,
@@ -1703,9 +2336,7 @@ let debug = false; // Flag for enabling debug mode
 
 			datasets.push({
 				label: "Minimum N",
-				data: labels.map(function(value) {
-					return value === highlightedN ? { x: value, y: roundTo(targetPower * 100, 1) } : null;
-				}),
+				data: isFinite(highlightedN) && isFinite(highlightedY) ? [{ x: highlightedN, y: highlightedY }] : [],
 				borderColor: "#111827",
 				backgroundColor: "#111827",
 				showLine: false,
@@ -1715,15 +2346,13 @@ let debug = false; // Flag for enabling debug mode
 
 			datasets.push({
 				label: "Required N",
-				data: labels.map(function(value) {
-					return value === requiredN ? { x: value, y: roundTo(targetPower * 100, 1) } : null;
-				}),
+				data: isFinite(requiredN) ? [{ x: requiredN, y: 0 }, { x: requiredN, y: 100 }] : [],
 				borderColor: "#c2410c",
 				backgroundColor: "#c2410c",
-				showLine: false,
-				pointStyle: "rectRot",
-				pointRadius: 6,
-				pointHoverRadius: 7
+				borderDash: [4, 4],
+				pointRadius: 0,
+				pointHoverRadius: 0,
+				tension: 0
 			});
 
 			destroyPowerChart();
@@ -1738,6 +2367,37 @@ let debug = false; // Flag for enabling debug mode
 					interaction: {
 						mode: "nearest",
 						intersect: false
+					},
+					plugins: {
+						legend: {
+							labels: {
+								usePointStyle: true,
+								pointStyleWidth: 18,
+								generateLabels: function(chart) {
+									// Chart.js uses generic legend markers by default.
+									// We override them here so the legend matches the
+									// actual plot semantics: effect curves, target line,
+									// minimum point, and required vertical line.
+									let defaultLabels = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+
+									return defaultLabels.map(function(label) {
+										if(label.text === "Target power") {
+											label.pointStyle = createLegendLineSymbol("#111827", [6, 4], false);
+										} else if(label.text === "Required N") {
+											label.pointStyle = createLegendLineSymbol("#c2410c", [4, 4], true);
+										} else if(label.text === "Minimum N") {
+											label.pointStyle = "circle";
+											label.fillStyle = "#111827";
+											label.strokeStyle = "#111827";
+										} else {
+											label.pointStyle = createLegendSquareSymbol(label.fillStyle || label.strokeStyle || "#0d6efd", label.strokeStyle || label.fillStyle || "#0d6efd");
+										}
+
+										return label;
+									});
+								}
+							}
+						}
 					},
 					scales: {
 						y: {
@@ -1765,18 +2425,281 @@ let debug = false; // Flag for enabling debug mode
 		}
 
 		function buildAnovaPowerFormula(effectRow, selectedParticipants) {
-			let lambdaWeight = effectRow.cohenF > 0 ? effectRow.lambda / (selectedParticipants * effectRow.cohenF * effectRow.cohenF) : 0;
-			return "<code>Power = 1 - F<sub>ncf</sub>(F<sub>crit</sub>; df1 = " + effectRow.df1 + ", df2 = " + effectRow.df2 + ", &lambda; = " + roundTo(effectRow.lambda, 3) + ")</code><br /><code>&lambda; = N &times; f<sup>2</sup> &times; w = " + selectedParticipants + " &times; " + roundTo(effectRow.cohenF * effectRow.cohenF, 3) + " &times; " + roundTo(lambdaWeight, 3) + "</code>";
+			let safeLambda = Number.isFinite(effectRow.lambda) ? effectRow.lambda : 0;
+			let safeF = Number.isFinite(effectRow.cohenF) ? effectRow.cohenF : 0;
+			let safeFSquared = safeF * safeF;
+			let lambdaWeight = safeFSquared > 0 && selectedParticipants > 0 ? safeLambda / (selectedParticipants * safeFSquared) : 0;
+			return '<div class="formula-stack">' +
+				'<p>This result is based on the controlling ANOVA effect <strong>' + effectRow.label + '</strong> (' + (effectRow.effectType || "ANOVA effect") + ').</p>' +
+				'<math display="block"><mrow><mi>Power</mi><mo>=</mo><mn>1</mn><mo>-</mo><msub><mi>F</mi><mi>ncf</mi></msub><mo>(</mo><msub><mi>F</mi><mi>crit</mi></msub><mo>;</mo><mi>df</mi><mn>1</mn><mo>=</mo><mn>' + effectRow.df1 + '</mn><mo>,</mo><mi>df</mi><mn>2</mn><mo>=</mo><mn>' + effectRow.df2 + '</mn><mo>,</mo><mi>&lambda;</mi><mo>=</mo><mn>' + roundTo(safeLambda, 3) + '</mn><mo>)</mo></mrow></math>' +
+				'<math display="block"><mrow><mi>&lambda;</mi><mo>=</mo><mi>N</mi><mo>&times;</mo><msup><mi>f</mi><mn>2</mn></msup><mo>&times;</mo><mi>w</mi><mo>=</mo><mn>' + selectedParticipants + '</mn><mo>&times;</mo><mn>' + roundTo(safeFSquared, 3) + '</mn><mo>&times;</mo><mn>' + roundTo(lambdaWeight, 3) + '</mn></mrow></math>' +
+				'<p><strong>Step 1.</strong> The current participant count is <strong>N = ' + selectedParticipants + '</strong>.</p>' +
+				'<p><strong>Step 2.</strong> The selected omnibus effect size is <strong>f = ' + roundTo(effectRow.cohenF, 3) + '</strong>, therefore <strong>f² = ' + roundTo(effectRow.cohenF * effectRow.cohenF, 3) + '</strong>.</p>' +
+				'<p><strong>Step 3.</strong> The model-specific weight is <strong>w = ' + roundTo(lambdaWeight, 3) + '</strong>, which leads to <strong>&lambda; = ' + roundTo(safeLambda, 3) + '</strong>.</p>' +
+				'<p><strong>Step 4.</strong> With <strong>df1 = ' + effectRow.df1 + '</strong> and <strong>df2 = ' + effectRow.df2 + '</strong>, the noncentral F distribution yields the reported power for this specific ANOVA effect.</p>' +
+				'</div>';
 		}
 
 		function buildRegressionFormula(regressionResult, selectedParticipants) {
-			let fSquaredRow = regressionResult.tableRows.find(function(row) { return row.label === "Effect size (f^2)"; });
+			let fSquaredRow = regressionResult.tableRows.find(function(row) { return row.label === "Effect size (f²)"; });
 			let fSquared = fSquaredRow ? parseFloat(fSquaredRow.value) : 0;
-			return "<code>Power = 1 - F<sub>ncf</sub>(F<sub>crit</sub>; u = p, v = N - p - 1, &lambda; = N &times; f<sup>2</sup>)</code><br /><code>&lambda; = " + selectedParticipants + " &times; " + roundTo(fSquared, 3) + " = " + roundTo(selectedParticipants * fSquared, 3) + "</code>";
+			let predictorsRow = regressionResult.tableRows.find(function(row) { return row.label === "Predictors"; });
+			let numeratorDfRow = regressionResult.tableRows.find(function(row) { return row.label === "Numerator df (u)"; });
+			let denominatorDfRow = regressionResult.tableRows.find(function(row) { return row.label === "Denominator df (v)"; });
+			return '<div class="formula-stack">' +
+				'<p>This result is based on the overall multiple regression model.</p>' +
+				'<math display="block"><mrow><mi>Power</mi><mo>=</mo><mn>1</mn><mo>-</mo><msub><mi>F</mi><mi>ncf</mi></msub><mo>(</mo><msub><mi>F</mi><mi>crit</mi></msub><mo>;</mo><mi>u</mi><mo>=</mo><mn>' + (numeratorDfRow ? numeratorDfRow.value : "?") + '</mn><mo>,</mo><mi>v</mi><mo>=</mo><mn>' + (denominatorDfRow ? denominatorDfRow.value : "?") + '</mn><mo>,</mo><mi>&lambda;</mi><mo>=</mo><mn>' + roundTo(selectedParticipants * fSquared, 3) + '</mn><mo>)</mo></mrow></math>' +
+				'<math display="block"><mrow><mi>&lambda;</mi><mo>=</mo><mi>N</mi><mo>&times;</mo><msup><mi>f</mi><mn>2</mn></msup><mo>=</mo><mn>' + selectedParticipants + '</mn><mo>&times;</mo><mn>' + roundTo(fSquared, 3) + '</mn><mo>=</mo><mn>' + roundTo(selectedParticipants * fSquared, 3) + '</mn></mrow></math>' +
+				'<p><strong>Step 1.</strong> The model contains <strong>' + (predictorsRow ? predictorsRow.value : "?") + '</strong> predictor(s).</p>' +
+				'<p><strong>Step 2.</strong> The expected regression effect is <strong>f² = ' + roundTo(fSquared, 3) + '</strong>.</p>' +
+				'<p><strong>Step 3.</strong> With <strong>N = ' + selectedParticipants + '</strong>, this gives <strong>&lambda; = ' + roundTo(selectedParticipants * fSquared, 3) + '</strong>.</p>' +
+				'<p><strong>Step 4.</strong> The F test then uses <strong>u = ' + (numeratorDfRow ? numeratorDfRow.value : "?") + '</strong> and <strong>v = ' + (denominatorDfRow ? denominatorDfRow.value : "?") + '</strong> to compute the final power.</p>' +
+				'</div>';
 		}
 
-		function buildPowerSummary(minimumN, requiredN, controllingLabel) {
-			return "<p><strong>Minimum N:</strong> " + minimumN + " participants to reach the selected target power.</p><p><strong>Required N:</strong> " + requiredN + " participants after rounding to the current design sequence multiple.</p><p><strong>Controlling effect:</strong> " + controllingLabel + "</p>";
+		function buildTTestFormula(selectedResult) {
+			let isPaired = studyDesign.withinIVs.length > 0;
+			let criticalT = Number.isFinite(selectedResult.criticalT) ? selectedResult.criticalT : 0;
+			let delta = Number.isFinite(selectedResult.delta) ? selectedResult.delta : 0;
+			let df = selectedResult.df2;
+			let cohenD = Number.isFinite(selectedResult.cohenD) ? selectedResult.cohenD : 0;
+			let cohenDz = Number.isFinite(selectedResult.cohenDz) ? selectedResult.cohenDz : cohenD;
+			let sampleSize = selectedResult.sampleSize || 0;
+			let perGroup = selectedResult.groupSampleSize || Math.max(1, Math.round(sampleSize / 2));
+
+			if(isPaired) {
+				return '<div class="formula-stack">' +
+					'<p>This result is based on the paired two-tailed t-test for matched observations.</p>' +
+					'<math display="block"><mrow><mi>df</mi><mo>=</mo><mi>N</mi><mo>-</mo><mn>1</mn><mo>=</mo><mn>' + sampleSize + '</mn><mo>-</mo><mn>1</mn><mo>=</mo><mn>' + df + '</mn></mrow></math>' +
+					'<math display="block"><mrow><mi>&delta;</mi><mo>=</mo><msub><mi>d</mi><mi>z</mi></msub><mo>&times;</mo><msqrt><mi>N</mi></msqrt><mo>=</mo><mn>' + roundTo(cohenDz, 3) + '</mn><mo>&times;</mo><msqrt><mn>' + sampleSize + '</mn></msqrt><mo>=</mo><mn>' + roundTo(delta, 3) + '</mn></mrow></math>' +
+					'<math display="block"><mrow><msub><mi>t</mi><mi>crit</mi></msub><mo>=</mo><msup><mi>t</mi><mrow><mo>-</mo><mn>1</mn></mrow></msup><mo>(</mo><mn>1</mn><mo>-</mo><mi>&alpha;</mi><mo>/</mo><mn>2</mn><mo>,</mo><mi>df</mi><mo>)</mo><mo>=</mo><mn>' + roundTo(criticalT, 6) + '</mn></mrow></math>' +
+					'<math display="block"><mrow><mi>Power</mi><mo>=</mo><mi>P</mi><mo>(</mo><mo>|</mo><mi>T</mi><mo>|</mo><mo>&gt;</mo><msub><mi>t</mi><mi>crit</mi></msub><mo>)</mo><mo>,</mo><mspace width="0.4em"></mspace><mi>T</mi><mo>&#x223C;</mo><mi>t</mi><mo>(</mo><mi>df</mi><mo>=</mo><mn>' + df + '</mn><mo>,</mo><mi>&delta;</mi><mo>=</mo><mn>' + roundTo(delta, 3) + '</mn><mo>)</mo></mrow></math>' +
+					'<p><strong>Step 1.</strong> The standardized paired effect is entered as <strong>d = ' + roundTo(cohenD, 3) + '</strong>. For the matched-pairs test this is converted to <strong>d<sub>z</sub> = ' + roundTo(cohenDz, 3) + '</strong> using the fixed repeated-measures correlation.</p>' +
+					'<p><strong>Step 2.</strong> With <strong>N = ' + sampleSize + '</strong> pairs, the noncentrality parameter becomes <strong>&delta; = ' + roundTo(delta, 3) + '</strong>.</p>' +
+					'<p><strong>Step 3.</strong> The two-tailed critical value is <strong>t<sub>crit</sub> = ' + roundTo(criticalT, 6) + '</strong> for <strong>df = ' + df + '</strong>.</p>' +
+					'<p><strong>Step 4.</strong> The reported power is the probability that the noncentral t distribution exceeds <strong>&plusmn;t<sub>crit</sub></strong>.</p>' +
+					'</div>';
+			}
+
+			return '<div class="formula-stack">' +
+				'<p>This result is based on the independent two-tailed t-test with equal group sizes.</p>' +
+				'<math display="block"><mrow><mi>df</mi><mo>=</mo><mn>2</mn><mi>n</mi><mo>-</mo><mn>2</mn><mo>=</mo><mn>2</mn><mo>&times;</mo><mn>' + perGroup + '</mn><mo>-</mo><mn>2</mn><mo>=</mo><mn>' + df + '</mn></mrow></math>' +
+				'<math display="block"><mrow><mi>&delta;</mi><mo>=</mo><mi>d</mi><mo>&times;</mo><msqrt><mfrac><mi>n</mi><mn>2</mn></mfrac></msqrt><mo>=</mo><mn>' + roundTo(cohenD, 3) + '</mn><mo>&times;</mo><msqrt><mfrac><mn>' + perGroup + '</mn><mn>2</mn></mfrac></msqrt><mo>=</mo><mn>' + roundTo(delta, 3) + '</mn></mrow></math>' +
+				'<math display="block"><mrow><msub><mi>t</mi><mi>crit</mi></msub><mo>=</mo><msup><mi>t</mi><mrow><mo>-</mo><mn>1</mn></mrow></msup><mo>(</mo><mn>1</mn><mo>-</mo><mi>&alpha;</mi><mo>/</mo><mn>2</mn><mo>,</mo><mi>df</mi><mo>)</mo><mo>=</mo><mn>' + roundTo(criticalT, 6) + '</mn></mrow></math>' +
+				'<math display="block"><mrow><mi>Power</mi><mo>=</mo><mi>P</mi><mo>(</mo><mo>|</mo><mi>T</mi><mo>|</mo><mo>&gt;</mo><msub><mi>t</mi><mi>crit</mi></msub><mo>)</mo><mo>,</mo><mspace width="0.4em"></mspace><mi>T</mi><mo>&#x223C;</mo><mi>t</mi><mo>(</mo><mi>df</mi><mo>=</mo><mn>' + df + '</mn><mo>,</mo><mi>&delta;</mi><mo>=</mo><mn>' + roundTo(delta, 3) + '</mn><mo>)</mo></mrow></math>' +
+				'<p><strong>Step 1.</strong> The standardized difference is entered as <strong>d = ' + roundTo(cohenD, 3) + '</strong>.</p>' +
+				'<p><strong>Step 2.</strong> With equal group sizes of <strong>n = ' + perGroup + '</strong> per group, the noncentrality parameter becomes <strong>&delta; = ' + roundTo(delta, 3) + '</strong>.</p>' +
+				'<p><strong>Step 3.</strong> The two-tailed critical value is <strong>t<sub>crit</sub> = ' + roundTo(criticalT, 6) + '</strong> for <strong>df = ' + df + '</strong>.</p>' +
+				'<p><strong>Step 4.</strong> The reported power is the probability that the noncentral t distribution exceeds <strong>&plusmn;t<sub>crit</sub></strong>.</p>' +
+				'</div>';
+		}
+
+		function buildConditionCombinations(factors) {
+			let safeFactors = (factors || []).filter(function(factor) {
+				return factor && Array.isArray(factor.levels) && factor.levels.length > 0;
+			});
+			let combinations = [{}];
+			let safetyCounter = 0;
+			let maxCombinations = 64;
+
+			safeFactors.forEach(function(factor) {
+				let next = [];
+
+				factor.levels.forEach(function(level) {
+					combinations.forEach(function(existing) {
+						if(safetyCounter >= maxCombinations) {
+							return;
+						}
+
+						let expanded = Object.assign({}, existing);
+						expanded[factor.name] = level;
+						next.push(expanded);
+						safetyCounter++;
+					});
+				});
+
+				combinations = next.length ? next : combinations;
+			});
+
+			return combinations.slice(0, maxCombinations);
+		}
+
+		function buildPlaceholderObservationRows() {
+			let rows = [];
+			let betweenCombinations = buildConditionCombinations(studyDesign.betweenIVs);
+			let withinCombinations = buildConditionCombinations(studyDesign.withinIVs);
+			let dvs = studyDesign.DVs || [];
+			let subjectId = 1;
+			let maxSubjects = Math.max(6, betweenCombinations.length || 0);
+
+			if(!betweenCombinations.length) {
+				betweenCombinations = [{}];
+			}
+
+			if(!withinCombinations.length) {
+				withinCombinations = [{}];
+			}
+
+			if(hasNominalFactors()) {
+				betweenCombinations.forEach(function(betweenCondition) {
+					let rowOffset = 0;
+
+					if(subjectId > maxSubjects) {
+						return;
+					}
+
+					withinCombinations.forEach(function(withinCondition) {
+						let rowCells = ['<td>' + subjectId + '</td>'];
+
+						studyDesign.IVs.forEach(function(iv, ivIndex) {
+							let value = "";
+
+							if(Object.prototype.hasOwnProperty.call(betweenCondition, iv.name)) {
+								value = betweenCondition[iv.name];
+							} else if(Object.prototype.hasOwnProperty.call(withinCondition, iv.name)) {
+								value = withinCondition[iv.name];
+							} else if(iv.type !== "N") {
+								value = 20 + (subjectId * 3) + ivIndex;
+							}
+
+							rowCells.push('<td>' + value + '</td>');
+						});
+
+						dvs.forEach(function(dv, dvIndex) {
+							rowCells.push('<td>' + roundTo(60 + (subjectId * 4.5) + rowOffset + (dvIndex * 2), 1) + '</td>');
+						});
+
+						rows.push("<tr>" + rowCells.join("") + "</tr>");
+						rowOffset++;
+					});
+
+					subjectId++;
+				});
+			} else {
+				for(let rowIndex = 1; rowIndex <= 4; rowIndex++) {
+					let rowCells = ['<td>' + rowIndex + '</td>'];
+
+					studyDesign.IVs.forEach(function(iv, ivIndex) {
+						rowCells.push('<td>' + (20 + rowIndex * 5 + ivIndex * 3) + '</td>');
+					});
+
+					dvs.forEach(function(dv, dvIndex) {
+						rowCells.push('<td>' + roundTo(55 + rowIndex * 4.2 + dvIndex * 2.3, 1) + '</td>');
+					});
+
+					rows.push("<tr>" + rowCells.join("") + "</tr>");
+				}
+			}
+
+			return rows;
+		}
+
+		function buildPlaceholderDataTab() {
+			let headers = ["<th>SubjectID</th>"];
+			let rows = buildPlaceholderObservationRows();
+
+			studyDesign.IVs.forEach(function(iv) {
+				headers.push("<th>" + iv.name + "</th>");
+			});
+
+			if(studyDesign.DVs.length > 0) {
+				studyDesign.DVs.forEach(function(dv) {
+					headers.push("<th>" + dv.name + "</th>");
+				});
+			} else {
+				headers.push("<th>Outcome</th>");
+			}
+
+			return '<p>Use one row per observation. For repeated-measures designs, the same <code>SubjectID</code> appears in multiple rows, once for each user-defined within-condition combination.</p>' +
+				'<div class="table-responsive"><table class="table table-striped table-bordered"><thead><tr>' + headers.join("") + '</tr></thead><tbody>' + rows.join("") + '</tbody></table></div>' +
+				'<div class="mt-3"></div>' +
+				'<p><strong>Formatting rule:</strong> each IV gets its own column, each DV gets its own column, and every within-subject condition combination appears as a separate row for the same <code>SubjectID</code>.</p>';
+		}
+
+		function buildPowerSummary(minimumN, requiredN, controllingLabel, targetPower) {
+			let targetPowerPercent = roundTo(normalizeTargetPowerValue(targetPower || 0.8) * 100, 0);
+			return "<p><strong>Minimum N:</strong> " + minimumN + " participants to reach the target power of " + targetPowerPercent + "%.</p><p><strong>Required N:</strong> " + requiredN + " participants after rounding to the current design sequence multiple.</p><p><strong>Controlling effect:</strong> " + controllingLabel + " (selected with the radio buttons below).</p>";
+		}
+
+		function getNominalStepSize() {
+			return Math.max(1, studyDesign.betweenConditions && studyDesign.betweenConditions.length ? studyDesign.betweenConditions.length : 1);
+		}
+
+		function getRequiredSampleSizeForCurrentDesign(minimumN) {
+			return roundUpToNextDivisible(Math.max(0, parseInt(minimumN, 10) || 0), getDesignAlignmentMultiple());
+		}
+
+		function formatAnovaEffectType(effectType) {
+			if(effectType === "mixed interaction" || effectType === "within interaction" || effectType === "between interaction") {
+				return "Interaction";
+			}
+
+			if(effectType === "within") {
+				return "Within";
+			}
+
+			if(effectType === "between") {
+				return "Between";
+			}
+
+			return "Effect";
+		}
+
+		function normalizeTargetPowerValue(powerValue) {
+			return Math.min(0.99, Math.max(0.5, Number(powerValue) || 0.8));
+		}
+
+		function findAnovaEffectRowAtSampleSize(effectLabel, participants, cohensF) {
+			let result = StudyPowerEngine.estimateAnovaPower({
+				factors: getNominalFactors(),
+				effectSizeF: cohensF,
+				alpha: 0.05,
+				totalParticipants: participants,
+				withinCorrelation: getCurrentWithinCorrelation()
+			});
+
+			return result.rows.find(function(row) {
+				return row._row === effectLabel;
+			}) || null;
+		}
+
+		function estimateMinimumForAnovaEffect(effectLabel, targetPower, cohensF) {
+			let stepSize = getNominalStepSize();
+			let minimumFloor = Math.max(stepSize * 2, stepSize);
+			let sampleSizeCandidate = minimumFloor;
+			let maxParticipants = 5000;
+			let maxIterations = 500;
+			let iterations = 0;
+			let effectRow = findAnovaEffectRowAtSampleSize(effectLabel, sampleSizeCandidate, cohensF);
+
+			while(effectRow && (effectRow.power / 100) < targetPower && sampleSizeCandidate < maxParticipants && iterations < maxIterations) {
+				sampleSizeCandidate += stepSize;
+				effectRow = findAnovaEffectRowAtSampleSize(effectLabel, sampleSizeCandidate, cohensF);
+				iterations++;
+			}
+
+			return {
+				minimumN: sampleSizeCandidate,
+				requiredN: roundUpToNextDivisible(sampleSizeCandidate, getDesignAlignmentMultiple()),
+				effectRow: effectRow
+			};
+		}
+
+		function getSelectedAnovaControlLabel(effectRows) {
+			if(!lastAnovaPowerResult) {
+				return null;
+			}
+
+			let selectedLabel = lastAnovaPowerResult.selectedControllingLabel;
+			let exists = effectRows.some(function(row) {
+				return row.label === selectedLabel;
+			});
+
+			if(exists) {
+				return selectedLabel;
+			}
+
+			return null;
 		}
 
 		function getNominalRCode() {
@@ -1803,28 +2726,56 @@ let debug = false; // Flag for enabling debug mode
 			return "lm_model <- lm(" + studyDesign.DVs[0].name + " ~ " + getNamesFromArray(studyDesign.nonOrdinalIVs, " + ", "name").slice(0, -3) + ", data = data)<br />summary(lm_model)";
 		}
 
-		function appendPowerTabs(containerId, uniqueId, overviewHtml, formulaHtml, rCodeHtml) {
+		function appendPowerTabs(containerId, uniqueId, overviewHtml, formulaHtml, placeholderHtml) {
 			let tabsHtml = '<ul class="nav nav-pills mb-3 mt-3" id="power-tabs-' + uniqueId + '" role="tablist">' +
 				'<li class="nav-item" role="presentation"><button class="nav-link active" id="overview-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#overview-' + uniqueId + '" type="button" role="tab">Overview</button></li>' +
 				'<li class="nav-item" role="presentation"><button class="nav-link" id="formula-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#formula-' + uniqueId + '" type="button" role="tab">Formula</button></li>' +
-				'<li class="nav-item" role="presentation"><button class="nav-link" id="rcode-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#rcode-' + uniqueId + '" type="button" role="tab">R code</button></li>' +
+				'<li class="nav-item" role="presentation"><button class="nav-link" id="placeholder-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#placeholder-' + uniqueId + '" type="button" role="tab">Placeholder data</button></li>' +
 				'</ul>' +
 				'<div class="tab-content">' +
 				'<div class="tab-pane fade show active" id="overview-' + uniqueId + '" role="tabpanel">' + overviewHtml + '</div>' +
 				'<div class="tab-pane fade" id="formula-' + uniqueId + '" role="tabpanel">' + formulaHtml + '</div>' +
-				'<div class="tab-pane fade" id="rcode-' + uniqueId + '" role="tabpanel"><code>' + rCodeHtml + '</code></div>' +
+				'<div class="tab-pane fade" id="placeholder-' + uniqueId + '" role="tabpanel">' + placeholderHtml + '</div>' +
 				'</div>';
 
 			$(containerId).append(tabsHtml);
 		}
 
+		function replacePowerAccordion(collapseId, resultStr) {
+			let existingCollapse = $("#power").find("#" + collapseId);
+			let existingAccordion = existingCollapse.closest(".accordion");
+			let wasOpen = existingCollapse.hasClass("show");
+
+			if(existingAccordion.length > 0) {
+				existingAccordion.replaceWith(resultStr);
+
+				if(wasOpen) {
+					let newCollapse = $("#power").find("#" + collapseId);
+					let newButton = newCollapse.closest(".accordion-item").find(".accordion-button").first();
+					newCollapse.addClass("show");
+					newButton.removeClass("collapsed").attr("aria-expanded", "true");
+				}
+
+				return;
+			}
+
+			$("#power").append(resultStr);
+		}
+
 		function showRegressionPowerAndEffectSizes(regressionResult, participants){
 			$("#rowES").show();
-			let summaryHtml = buildPowerSummary(regressionResult.minimumN || participants, participants, "Overall regression model");
+			let requiredN = getRequiredSampleSizeForCurrentDesign(regressionResult.minimumN || participants);
+			let selectedRegressionResult = StudyPowerEngine.estimateRegressionPower({
+				predictors: studyDesign.nonOrdinalIVs.length,
+				participants: requiredN,
+				effectSizeFSquared: resolveEffectSizes().cohensF * resolveEffectSizes().cohensF,
+				alpha: 0.05,
+			});
+			let summaryHtml = buildPowerSummary(regressionResult.minimumN || requiredN, requiredN, "Overall regression model", getTargetPower());
 			let tableBody = "";
 			let selectedRegressionPoint = {
 				label: "Overall regression model",
-				power: regressionResult.power
+				power: selectedRegressionResult.power
 			};
 			let curvePoints = buildConsistentCurvePoints(
 				(regressionResult.curvePoints || []).map(function(point) {
@@ -1836,32 +2787,32 @@ let debug = false; // Flag for enabling debug mode
 						}]
 					};
 				}),
-				participants,
+				requiredN,
 				[selectedRegressionPoint]
 			);
 
-			$(regressionResult.tableRows).each(function(i){
-				tableBody += "<tr><td>" + regressionResult.tableRows[i].label + "</td><td>" + regressionResult.tableRows[i].value + "</td></tr>";
+			$(selectedRegressionResult.tableRows).each(function(i){
+				tableBody += "<tr><td>" + selectedRegressionResult.tableRows[i].label + "</td><td>" + selectedRegressionResult.tableRows[i].value + "</td></tr>";
 			});
 
 			let overviewHtml = summaryHtml +
 				'<div class="chart-shell" style="height: 320px;"><canvas id="powerChartRegression"></canvas></div>' +
 				'<div class="table-responsive mt-3"><table class="table table-striped table-bordered"><thead><tr><th>Regression parameter</th><th>Value</th></tr></thead><tbody>' + tableBody + '</tbody></table></div>';
-			let formulaHtml = "<p>" + buildRegressionFormula(regressionResult, participants) + "</p>";
-			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseREGRESSIONES" aria-controls="collapseREGRESSIONES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori regression power</h6></button><div id="collapseREGRESSIONES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="regressionPowerBody"></div></div></div></div>';
+			let formulaHtml = buildRegressionFormula(selectedRegressionResult, requiredN);
+			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseREGRESSIONES" aria-controls="collapseREGRESSIONES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori sample size analysis</h6></button><div id="collapseREGRESSIONES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="regressionPowerBody"></div></div></div></div>';
 
-			$("#power").append(resultStr);
-			appendPowerTabs("#regressionPowerBody", "regression", overviewHtml, formulaHtml, getRegressionRCode());
-			renderPowerChart("powerChartRegression", curvePoints, regressionResult.minimumN || participants, participants, getTargetPower());
+			replacePowerAccordion("collapseREGRESSIONES", resultStr);
+			appendPowerTabs("#regressionPowerBody", "regression", overviewHtml, formulaHtml, buildPlaceholderDataTab());
+			renderPowerChart("powerChartRegression", curvePoints, regressionResult.minimumN || requiredN, regressionResult.power, requiredN, getTargetPower());
 			$("#resultsPanel").show();
 		}
 
 		function showTTestPowerAndEffectSizes(tTestResult, participants) {
 			$("#rowES").show();
-			let selectedResult = tTestResult.selectedResult || tTestResult.effectRow;
+			let requiredN = getRequiredSampleSizeForCurrentDesign(tTestResult.minimumN || participants);
+			let selectedResult = computeTTestPowerAtSampleSize(requiredN, resolveEffectSizes().cohensD, studyDesign.withinIVs.length > 0, getCurrentWithinCorrelation());
 			selectedResult.label = selectedResult.label || (studyDesign.withinIVs.length > 0 ? "Paired t-test" : "Independent t-test");
-			let requiredN = participants;
-			let summaryHtml = buildPowerSummary(tTestResult.minimumN, requiredN, studyDesign.withinIVs.length > 0 ? "Paired t-test" : "Independent t-test");
+			let summaryHtml = buildPowerSummary(tTestResult.minimumN, requiredN, studyDesign.withinIVs.length > 0 ? "Paired t-test" : "Independent t-test", getTargetPower());
 			let curvePoints = buildConsistentCurvePoints(
 				tTestResult.curvePoints.slice(),
 				requiredN,
@@ -1872,27 +2823,57 @@ let debug = false; // Flag for enabling debug mode
 				'<div class="table-responsive mt-3"><table class="table table-striped table-bordered"><thead><tr><th>Statistic</th><th>Value</th></tr></thead><tbody>' +
 				'<tr><td>Power</td><td>' + roundTo(selectedResult.power * 100, 1) + '%</td></tr>' +
 				'<tr><td>Cohen\'s d</td><td>' + roundTo(selectedResult.cohenD, 3) + '</td></tr>' +
+				(studyDesign.withinIVs.length > 0 ? '<tr><td>Cohen\'s d<sub>z</sub></td><td>' + roundTo(selectedResult.cohenDz, 3) + '</td></tr>' : "") +
 				'<tr><td>Cohen\'s f</td><td>' + roundTo(selectedResult.cohenF, 3) + '</td></tr>' +
 				'<tr><td>Partial eta squared</td><td>' + roundTo(selectedResult.partialEtaSquared, 3) + '</td></tr>' +
-				'<tr><td>df1 / df2</td><td>' + selectedResult.df1 + ' / ' + selectedResult.df2 + '</td></tr>' +
+				'<tr><td>Degrees of freedom</td><td>' + selectedResult.df2 + '</td></tr>' +
+				'<tr><td>Critical t</td><td>' + roundTo(selectedResult.criticalT, 6) + '</td></tr>' +
+				'<tr><td>Noncentrality δ</td><td>' + roundTo(selectedResult.delta, 6) + '</td></tr>' +
+				(studyDesign.withinIVs.length === 0 ? '<tr><td>Sample size per group</td><td>' + selectedResult.groupSampleSize + '</td></tr>' : "") +
 				'</tbody></table></div>';
-			let formulaHtml = "<p><code>Power = 1 - F<sub>ncf</sub>(F<sub>crit</sub>; df1 = 1, df2 = " + selectedResult.df2 + ", &lambda; = " + roundTo(selectedResult.lambda, 3) + ")</code></p>";
-			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTTESTES" aria-controls="collapseTTESTES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori t-test power</h6></button><div id="collapseTTESTES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="ttestPowerBody"></div></div></div></div>';
+			let formulaHtml = buildTTestFormula(selectedResult);
+			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTTESTES" aria-controls="collapseTTESTES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori sample size analysis</h6></button><div id="collapseTTESTES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="ttestPowerBody"></div></div></div></div>';
 
-			$("#power").append(resultStr);
-			appendPowerTabs("#ttestPowerBody", "ttest", summaryHtml + tableHtml, formulaHtml, getNominalRCode());
-			renderPowerChart("powerChartTTest", curvePoints, tTestResult.minimumN, requiredN, getTargetPower());
+			replacePowerAccordion("collapseTTESTES", resultStr);
+			appendPowerTabs("#ttestPowerBody", "ttest", summaryHtml + tableHtml, formulaHtml, buildPlaceholderDataTab());
+			renderPowerChart("powerChartTTest", curvePoints, tTestResult.minimumN, tTestResult.effectRow ? tTestResult.effectRow.power : null, requiredN, getTargetPower());
 			$("#resultsPanel").show();
 		}
 
 		function showANOVAPowerAndEffectSizes(anovaResult, participants){
 			$("#rowES").show();
 			let effectSizes = resolveEffectSizes();
+			let storedTargets = lastAnovaPowerResult && lastAnovaPowerResult.effectTargetPowers ? lastAnovaPowerResult.effectTargetPowers : {};
+			let effectRequirementRows = anovaResult.effectRows.map(function(row) {
+				let targetPower = normalizeTargetPowerValue(storedTargets[row.label]);
+				let requirements = estimateMinimumForAnovaEffect(row.label, targetPower, effectSizes.cohensF);
+
+				return Object.assign({}, row, {
+					targetPower: targetPower,
+					minimumN: requirements.minimumN,
+					requiredN: requirements.requiredN,
+					minimumPower: requirements.effectRow ? requirements.effectRow.power / 100 : null
+				});
+			});
+			// The controlling effect is user-selectable. The currently selected row
+			// drives the summary above, the formula tab, and the Required N shown in the chart.
+			let selectedControllingLabel = getSelectedAnovaControlLabel(effectRequirementRows);
+			let controllingRow = effectRequirementRows.find(function(row) {
+				return row.label === selectedControllingLabel;
+			}) || effectRequirementRows.reduce(function(best, row) {
+				if(!best || row.requiredN > best.requiredN) {
+					return row;
+				}
+
+				return best;
+			}, null);
+			let requiredN = controllingRow ? controllingRow.requiredN : participants;
+			let minimumN = controllingRow ? controllingRow.minimumN : anovaResult.minimumN;
 			let selectedPower = StudyPowerEngine.estimateAnovaPower({
 				factors: getNominalFactors(),
 				effectSizeF: effectSizes.cohensF,
 				alpha: 0.05,
-				totalParticipants: participants,
+				totalParticipants: requiredN,
 				withinCorrelation: getCurrentWithinCorrelation()
 			});
 			let selectedRows = selectedPower.rows.map(function(row) {
@@ -1905,32 +2886,90 @@ let debug = false; // Flag for enabling debug mode
 					df2: row.df2
 				};
 			});
-			let controllingRow = selectedRows.reduce(function(best, row) {
-				if(!best || row.power < best.power) {
-					return row;
-				}
+			effectRequirementRows = effectRequirementRows.map(function(requirementRow) {
+				let selectedRow = selectedRows.find(function(row) {
+					return row.label === requirementRow.label;
+				});
 
-				return best;
-			}, null);
-			let requiredN = participants;
+				return Object.assign({}, requirementRow, selectedRow || {});
+			});
+			controllingRow = effectRequirementRows.find(function(row) {
+				return row.label === (controllingRow ? controllingRow.label : "");
+			}) || controllingRow;
 			let curvePoints = buildConsistentCurvePoints(anovaResult.curvePoints.slice(), requiredN, selectedRows);
-
-			let overviewHtml = buildPowerSummary(anovaResult.minimumN, requiredN, controllingRow ? controllingRow.label : "N/A") +
+			let overviewHtml = buildPowerSummary(minimumN, requiredN, controllingRow ? controllingRow.label : "N/A", controllingRow ? controllingRow.targetPower : getTargetPower()) +
 				'<div class="chart-shell" style="height: 340px;"><canvas id="powerChartAnova"></canvas></div>' +
-				'<div class="table-responsive mt-3"><table id="powerOutputTable" class="table table-striped table-bordered"><thead><tr><th>Effect</th><th>Power</th><th>Cohen\'s f</th><th>Partial eta squared</th><th>df1</th><th>df2</th></tr></thead><tbody>' +
-				selectedRows.map(function(row) {
-					return "<tr><td>" + row.label + "</td><td>" + roundTo(row.power * 100, 1) + "%</td><td>" + roundTo(row.cohenF, 3) + "</td><td>" + roundTo(row.partialEtaSquared, 3) + "</td><td>" + row.df1 + "</td><td>" + row.df2 + "</td></tr>";
+				'<div class="table-responsive mt-3"><table id="powerOutputTable" class="table table-striped table-bordered table-sm power-output-table"><thead><tr><th>Use</th><th>Effect</th><th>Type</th><th>Observed power</th><th>Target power</th><th>Min. N</th><th>Req. N</th><th>Cohen\'s f</th><th>partial eta²</th><th>df1</th><th>df2</th></tr></thead><tbody>' +
+				effectRequirementRows.map(function(row) {
+					let isChecked = controllingRow && row.label === controllingRow.label ? " checked" : "";
+					return "<tr><td><input class=\"form-check-input anova-controlling-effect\" type=\"radio\" name=\"anovaControllingEffect\" data-effect-label=\"" + row.label + "\"" + isChecked + "></td><td>" + row.label + "</td><td>" + formatAnovaEffectType(row.effectType) + "</td><td>" + roundTo(row.power * 100, 1) + "%</td><td><input class=\"form-control form-control-sm anova-target-power-input\" type=\"number\" min=\"50\" max=\"99\" step=\"1\" value=\"" + roundTo(row.targetPower * 100, 0) + "\" data-effect-label=\"" + row.label + "\"></td><td>" + row.minimumN + "</td><td>" + row.requiredN + "</td><td>" + roundTo(row.cohenF, 3) + "</td><td>" + roundTo(row.partialEtaSquared, 3) + "</td><td>" + row.df1 + "</td><td>" + row.df2 + "</td></tr>";
 				}).join("") +
-				'</tbody></table></div>';
-			let formulaHtml = controllingRow ? "<p>" + buildAnovaPowerFormula(controllingRow, requiredN) + "</p>" : "<p>No ANOVA effect available.</p>";
-			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseANOVAES" aria-controls="collapseANOVAES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori ANOVA power</h6></button><div id="collapseANOVAES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="anovaPowerBody"></div></div></div></div>';
+				'</tbody></table></div>' +
+				'<p class="helper-copy mt-3">Choose which effect should control the reported sample size and set a separate target power for each effect if needed.</p>';
+			let detailedControllingRow = controllingRow ? anovaResult.effectRows.find(function(row) {
+				return row.label === controllingRow.label;
+			}) : null;
+			let formulaHtml = detailedControllingRow ? buildAnovaPowerFormula(detailedControllingRow, requiredN) : "<p>No ANOVA effect available.</p>";
+			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseANOVAES" aria-controls="collapseANOVAES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori sample size analysis</h6></button><div id="collapseANOVAES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="anovaPowerBody"></div></div></div></div>';
 
-			$("#power").append(resultStr);
-			appendPowerTabs("#anovaPowerBody", "anova", overviewHtml, formulaHtml, getNominalRCode());
-			renderPowerChart("powerChartAnova", curvePoints, anovaResult.minimumN, requiredN, getTargetPower());
+			replacePowerAccordion("collapseANOVAES", resultStr);
+			appendPowerTabs("#anovaPowerBody", "anova", overviewHtml, formulaHtml, buildPlaceholderDataTab());
+			renderPowerChart("powerChartAnova", curvePoints, minimumN, controllingRow ? controllingRow.minimumPower : null, requiredN, controllingRow ? controllingRow.targetPower : getTargetPower());
+			lastAnovaPowerResult.effectTargetPowers = effectRequirementRows.reduce(function(targets, row) {
+				targets[row.label] = row.targetPower;
+				return targets;
+			}, {});
+			lastAnovaPowerResult.selectedControllingLabel = controllingRow ? controllingRow.label : null;
+			$("#anovaPowerBody .anova-controlling-effect").off("change").on("change", function() {
+				lastAnovaPowerResult.selectedControllingLabel = $(this).data("effect-label");
+				showANOVAPowerAndEffectSizes(lastAnovaPowerResult, participants);
+			});
+			$("#anovaPowerBody .anova-target-power-input").off("input change").on("input change", function() {
+				let effectLabel = $(this).data("effect-label");
+				let normalizedTarget = normalizeTargetPowerValue(parseFloat($(this).val()) / 100);
+				lastAnovaPowerResult.effectTargetPowers = lastAnovaPowerResult.effectTargetPowers || {};
+				lastAnovaPowerResult.selectedControllingLabel = effectLabel;
+				lastAnovaPowerResult.effectTargetPowers[effectLabel] = normalizedTarget;
+				$(this).val(roundTo(normalizedTarget * 100, 0));
+				showANOVAPowerAndEffectSizes(lastAnovaPowerResult, participants);
+			});
 			$("#resultsPanel").show();
 		}
 
+		function buildAnovaPowerFormula(effectRow, selectedParticipants) {
+			let safeLambda = Number.isFinite(effectRow.lambda) ? effectRow.lambda : 0;
+			let safeF = Number.isFinite(effectRow.cohenF) ? effectRow.cohenF : 0;
+			let safeFSquared = safeF * safeF;
+			let lambdaWeight = safeFSquared > 0 && selectedParticipants > 0 ? safeLambda / (selectedParticipants * safeFSquared) : 0;
+
+			return '<div class="formula-stack">' +
+				'<p>This result is based on the controlling ANOVA effect <strong>' + effectRow.label + '</strong> (' + (effectRow.effectType || "ANOVA effect") + ').</p>' +
+				'<math display="block"><mrow><mi>Power</mi><mo>=</mo><mn>1</mn><mo>-</mo><msub><mi>F</mi><mi>ncf</mi></msub><mo>(</mo><msub><mi>F</mi><mi>crit</mi></msub><mo>;</mo><mi>df</mi><mn>1</mn><mo>=</mo><mn>' + effectRow.df1 + '</mn><mo>,</mo><mi>df</mi><mn>2</mn><mo>=</mo><mn>' + effectRow.df2 + '</mn><mo>,</mo><mi>&lambda;</mi><mo>=</mo><mn>' + roundTo(safeLambda, 3) + '</mn><mo>)</mo></mrow></math>' +
+				'<math display="block"><mrow><mi>&lambda;</mi><mo>=</mo><mi>N</mi><mo>&times;</mo><msup><mi>f</mi><mn>2</mn></msup><mo>&times;</mo><mi>w</mi><mo>=</mo><mn>' + selectedParticipants + '</mn><mo>&times;</mo><mn>' + roundTo(safeFSquared, 3) + '</mn><mo>&times;</mo><mn>' + roundTo(lambdaWeight, 3) + '</mn></mrow></math>' +
+				'<p><strong>Step 1.</strong> The current participant count is <strong>N = ' + selectedParticipants + '</strong>.</p>' +
+				'<p><strong>Step 2.</strong> The selected omnibus effect size is <strong>f = ' + roundTo(safeF, 3) + '</strong>, therefore <strong>f² = ' + roundTo(safeFSquared, 3) + '</strong>.</p>' +
+				'<p><strong>Step 3.</strong> The model-specific weight is <strong>w = ' + roundTo(lambdaWeight, 3) + '</strong>, which leads to <strong>&lambda; = ' + roundTo(safeLambda, 3) + '</strong>.</p>' +
+				'<p><strong>Step 4.</strong> With <strong>df1 = ' + effectRow.df1 + '</strong> and <strong>df2 = ' + effectRow.df2 + '</strong>, the noncentral F distribution yields the reported power for this specific ANOVA effect.</p>' +
+				'</div>';
+		}
+
+		function buildRegressionFormula(regressionResult, selectedParticipants) {
+			let fSquaredRow = regressionResult.tableRows.find(function(row) { return row.label === "Effect size (f²)"; });
+			let fSquared = fSquaredRow ? parseFloat(fSquaredRow.value) : 0;
+			let predictorsRow = regressionResult.tableRows.find(function(row) { return row.label === "Predictors"; });
+			let numeratorDfRow = regressionResult.tableRows.find(function(row) { return row.label === "Numerator df (u)"; });
+			let denominatorDfRow = regressionResult.tableRows.find(function(row) { return row.label === "Denominator df (v)"; });
+
+			return '<div class="formula-stack">' +
+				'<p>This result is based on the overall multiple regression model.</p>' +
+				'<math display="block"><mrow><mi>Power</mi><mo>=</mo><mn>1</mn><mo>-</mo><msub><mi>F</mi><mi>ncf</mi></msub><mo>(</mo><msub><mi>F</mi><mi>crit</mi></msub><mo>;</mo><mi>u</mi><mo>=</mo><mn>' + (numeratorDfRow ? numeratorDfRow.value : "?") + '</mn><mo>,</mo><mi>v</mi><mo>=</mo><mn>' + (denominatorDfRow ? denominatorDfRow.value : "?") + '</mn><mo>,</mo><mi>&lambda;</mi><mo>=</mo><mn>' + roundTo(selectedParticipants * fSquared, 3) + '</mn><mo>)</mo></mrow></math>' +
+				'<math display="block"><mrow><mi>&lambda;</mi><mo>=</mo><mi>N</mi><mo>&times;</mo><msup><mi>f</mi><mn>2</mn></msup><mo>=</mo><mn>' + selectedParticipants + '</mn><mo>&times;</mo><mn>' + roundTo(fSquared, 3) + '</mn><mo>=</mo><mn>' + roundTo(selectedParticipants * fSquared, 3) + '</mn></mrow></math>' +
+				'<p><strong>Step 1.</strong> The model contains <strong>' + (predictorsRow ? predictorsRow.value : "?") + '</strong> predictor(s).</p>' +
+				'<p><strong>Step 2.</strong> The expected regression effect is <strong>f² = ' + roundTo(fSquared, 3) + '</strong>.</p>' +
+				'<p><strong>Step 3.</strong> With <strong>N = ' + selectedParticipants + '</strong>, this gives <strong>&lambda; = ' + roundTo(selectedParticipants * fSquared, 3) + '</strong>.</p>' +
+				'<p><strong>Step 4.</strong> The F test then uses <strong>u = ' + (numeratorDfRow ? numeratorDfRow.value : "?") + '</strong> and <strong>v = ' + (denominatorDfRow ? denominatorDfRow.value : "?") + '</strong> to compute the final power.</p>' +
+				'</div>';
+		}
 })();
 
 

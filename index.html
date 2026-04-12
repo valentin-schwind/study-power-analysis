@@ -12,8 +12,8 @@
     <link rel="stylesheet" href="_css/style.css" />
     <link rel="shortcut icon" href="favicon.ico" type="image/x-icon" />
 
-    <meta property="og:site_name" content="Study Design and Statistical Test Planner" />
-    <title>Study Design and Statistical Test Planner</title>
+    <meta property="og:site_name" content="Study Design and Power Analysis Planner" />
+    <title>Study Design and Power Analysis Planner</title>
 </head>
 <body>
     <script src="_js/jquery-3.6.0.min.js"></script>
@@ -37,7 +37,7 @@
 
                         <p class="kicker"><a href="https://hci-studies.org/" target="_blank" rel="noopener noreferrer">HOME</a> &gt;&gt; HCI User Studies Toolkit</p>
 
-                        <h1 id="demographicsTitle">Study Design and Statistical Test Planner</h1>
+                        <h1 id="demographicsTitle">Study Design and Power Analysis Planner</h1>
 
                         <p class="intro">
                             This tool is designed to plan and evaluate your study for HCI research. Enter your independent and dependent variables, estimate the difference between extreme measures and their pooled standard deviation, and use the resulting guidance to prepare an appropriate design and statistical testing strategy. The planner runs its core power-related estimates directly in the browser using simulation-based approximations inspired by common ANOVA and regression workflows. It offers quick-start guidance and does not replace careful methodological planning or supervisory input.
@@ -53,35 +53,48 @@
                         <div class="config-panel">
                             <form id="IVForm" class="form-horizontal tool-form">
                                 <div class="row mt-1 align-items-center">
-                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectIVText"><i class="bi bi-diagram-3 me-2"></i>Add your independent variables (IV)?</span><span class="text-danger">*</span></div>
-                                    <div class="col-lg-2 col-md-4"><input class="form-control" name="nameIV" required /></div>
-                                    <div class="col-lg-5 col-md-6"><select class="form-control" name="selectIVType" required></select></div>
-                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" type="button" id="addIV">Add</button></div>
+                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectIVText">Add independent variables (IV)</span><span class="text-danger">*</span></div>
+                                    <div class="col-lg-3 col-md-4">
+                                        <input class="form-control" name="nameIV" required />
+                                        <div class="invalid-feedback" id="ivNameFeedback">Please enter a valid IV name.</div>
+                                    </div>
+                                    <div class="col-lg-3 col-md-5"><select class="form-control" name="selectIVType" required></select></div>
+                                    <div class="col-lg-2 col-md-3 d-grid"><button class="btn btn-primary btn-md" type="button" id="addIV">Add</button></div>
                                 </div>
                                 <div class="row mt-3 align-items-center" id="withinIV">
                                     <div class="col-lg-4 d-none d-lg-block"></div>
                                     <div class="col-lg-2 col-md-4 form-label-column"><span>IV design</span></div>
-                                    <div class="col-lg-5 col-md-8"><select class="form-control" name="selectIVwithin" required></select></div>
+                                    <div class="col-lg-6 col-md-8"><select class="form-control" name="selectIVwithin" required></select></div>
                                 </div>
-                                <div class="row mt-3 align-items-center" id="levelsIV">
+                                <div class="row mt-3 align-items-start" id="levelsIV">
                                     <div class="col-lg-4 d-none d-lg-block"></div>
-                                    <div class="col-lg-2 col-md-4 form-label-column"><span>With levels</span></div>
-                                    <div class="col-lg-5 col-md-8"><input class="form-control" name="enterLevelsIV" required /></div>
+                                    <div class="col-lg-2 col-md-4 form-label-column pt-2"><span>With levels</span></div>
+                                    <div class="col-lg-6 col-md-8">
+                                        <input class="form-control d-none" name="enterLevelsIV" required />
+                                        <div class="token-input-shell" id="levelsTokenShell">
+                                            <div class="token-list" id="levelsTokenList" aria-live="polite"></div>
+                                            <input class="form-control token-input-field" id="levelsTokenInput" type="text" autocomplete="off" />
+                                        </div>
+                                        <div class="invalid-feedback d-block" id="ivLevelsFeedback" style="display:none;">Please add at least two unique levels.</div>
+                                    </div>
                                 </div>
                                 <div class="row mt-3 align-items-start">
                                     <div class="col-lg-4 d-none d-lg-block"></div>
-                                    <div class="col-lg-8 col-md-12"><ul class="selection-list" id="listIV"></ul></div>
+                                    <div class="col-lg-8 col-md-12"><ul class="selection-list selection-list-cards" id="listIV"></ul></div>
                                 </div>
                             </form>
 
                             <form id="DVForm" class="form-horizontal tool-form">
                                 <div class="row mt-3 align-items-center" id="rowDV">
-                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectDVText"><i class="bi bi-clipboard-data me-2"></i>Add your dependent variables (DV)?</span><span class="text-danger">*</span></div>
-                                    <div class="col-lg-2 col-md-4"><input class="form-control" name="nameDV" /></div>
-                                    <div class="col-lg-5 col-md-6"><select class="form-control" name="selectDVType"></select></div>
-                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" type="button" id="addDV">Add</button></div>
+                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectDVText">Add dependent variables (DV)</span><span class="text-danger">*</span></div>
+                                    <div class="col-lg-3 col-md-4">
+                                        <input class="form-control" name="nameDV" />
+                                        <div class="invalid-feedback" id="dvNameFeedback">Please enter a valid DV name.</div>
+                                    </div>
+                                    <div class="col-lg-3 col-md-5"><select class="form-control" name="selectDVType"></select></div>
+                                    <div class="col-lg-2 col-md-3 d-grid"><button class="btn btn-primary btn-md" type="button" id="addDV">Add</button></div>
                                     <div class="col-lg-4 d-none d-lg-block"></div>
-                                    <div class="col-lg-8 col-md-12 mt-3"><ul class="selection-list" id="listDV"></ul></div>
+                                    <div class="col-lg-8 col-md-12 mt-3"><ul class="selection-list selection-list-cards" id="listDV"></ul></div>
                                 </div>
                             </form>
                         </div>
@@ -117,7 +130,7 @@
                                 </div>
                             </div>
                             <div class="row mt-3 metric-row" id="cellEffectMode">
-                                <div class="col-lg-4 col-md-12 metric-label"><span>Primary effect size input:</span></div>
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Effect size input:</span></div>
                                 <div class="col-lg-8 col-md-12">
                                     <div class="row g-2 align-items-center">
                                         <div class="col-md-5">
@@ -135,7 +148,6 @@
                                             <button class="btn btn-outline-secondary" type="button" id="btnMediumEffect">Medium</button>
                                         </div>
                                     </div>
-                                    <small class="text-muted d-block mt-2" id="effectSizeModeHint">For multifactor ANOVAs, Cohen's d is treated as a two-condition reference contrast; Cohen's f and partial eta squared define the omnibus model effect.</small>
                                 </div>
                             </div>
                             <div class="row mt-3 metric-row" id="cellTargetPower">
@@ -164,8 +176,8 @@
                                 <div class="col-lg-4 col-md-12 metric-label"><span>Estimated initial effect sizes:</span></div>
                                 <div class="col-lg-8 col-md-12" id="effectSizeLabel"></div>
                             </div>
-                            <div class="row mt-3 metric-row" id="cellSampleSize">
-                                <div class="col-lg-4 col-md-12 metric-label"><span>Estimated sample size for this design:</span></div>
+                            <div class="row mt-3 metric-row d-none" id="cellSampleSize">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Sample size preview:</span></div>
                                 <div class="col-lg-8 col-md-12">
                                     <div id="sampleSizePleaseWait">Please wait...</div>
                                     <div class="mt-3" id="sampleSizeSlider">
@@ -228,7 +240,7 @@
 									<div class="resource-actions d-flex flex-wrap justify-content-start mt-2">
 										<a id="btnExample2x3Within" class="btn btn-secondary btn-md" role="button"><i class="bi bi-shuffle me-2"></i>Example 2x3 Within-Subject Design</a>
 										<a id="btnExample2x4Mixed" class="btn btn-secondary btn-md" role="button"><i class="bi bi-grid-3x3-gap me-2"></i>Example 2x4 Mixed-Design</a>
-										<a id="btnExampleRegression" class="btn btn-secondary btn-md" role="button"><i class="bi bi-scatter-chart me-2"></i>Example Regression</a>
+										<a id="btnExampleRegression" class="btn btn-secondary btn-md" role="button"><i class="bi bi-graph-up me-2"></i>Example Regression</a>
 									</div>
 								</div>
 							</div>
@@ -239,16 +251,16 @@
                         <div class="section-heading">
                             <h2><i class="bi bi-github me-2"></i>Source Code</h2>
                         </div>
-                        <p class="section-intro">Project repository and maintenance entry point for the published GitHub Pages version of the planner.</p>
+                        <p class="section-intro">Public source repository for the browser-based Study Design and Power Analysis Planner.</p>
 
                         <div class="resource-list">
                             <div class="resource-item" id="githublink">
                                 <div class="resource-text">
-                                    <h3><i class="bi bi-code-square me-2"></i>Study Design Planner Repository</h3>
-                                    <p><a href="https://github.com/valentin-schwind/study-design-planner" target="_blank" rel="noopener noreferrer">Source code on GitHub</a> for the planner and its GitHub Pages deployment.</p>
+                                    <h3><i class="bi bi-code-square me-2"></i>Study Design and Power Analysis Planner Repository</h3>
+                                    <p><a href="https://github.com/valentin-schwind/study-power-analysis" target="_blank" rel="noopener noreferrer">Source code on GitHub</a> for the current browser-based planner, including the JavaScript power-analysis engine.</p>
                                 </div>
                                 <div class="resource-actions">
-                                    <a href="https://github.com/valentin-schwind/study-design-planner" target="_blank" rel="noopener noreferrer" class="btn btn-primary" role="button">GitHub</a>
+                                    <a href="https://github.com/valentin-schwind/study-power-analysis" target="_blank" rel="noopener noreferrer" class="btn btn-primary" role="button">GitHub</a>
                                 </div>
                             </div>
                         </div>

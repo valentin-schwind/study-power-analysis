@@ -7,13 +7,8 @@
     const DEFAULT_WITHIN_CORRELATION = 0.5;
     const MAX_SEARCH_PARTICIPANTS = 4000;
     const MAX_SEARCH_ITERATIONS = 32;
-    const MAX_CURVE_POINTS = 30;
+    const MAX_CURVE_POINTS = 60;
     const criticalFCache = new Map();
-    const BETWEEN_WEIGHT_COEFFICIENTS = {
-        intercept: 0.5566116,
-        linear: 0.0283437,
-        quadratic: -0.00218684,
-    };
 
     function clamp(value, min, max) {
         return Math.min(Math.max(value, min), max);
@@ -318,6 +313,52 @@
         return result;
     }
 
+    function tCdf(value, degreesOfFreedom) {
+        if (!isFinite(value)) {
+            return value < 0 ? 0 : 1;
+        }
+
+        const safeDf = Math.max(1, Number(degreesOfFreedom) || 1);
+        const ratio = clamp(safeDf / (safeDf + value * value), 0, 1);
+        const betaTerm = regularizedIncompleteBeta(ratio, safeDf / 2, 0.5);
+
+        if (value >= 0) {
+            return 1 - 0.5 * betaTerm;
+        }
+
+        return 0.5 * betaTerm;
+    }
+
+    function invertTCdf(probability, degreesOfFreedom) {
+        let lower = -20;
+        let upper = 20;
+        let safetyCounter = 0;
+
+        while (tCdf(lower, degreesOfFreedom) > probability && safetyCounter < 32) {
+            lower *= 2;
+            safetyCounter++;
+        }
+
+        safetyCounter = 0;
+
+        while (tCdf(upper, degreesOfFreedom) < probability && safetyCounter < 32) {
+            upper *= 2;
+            safetyCounter++;
+        }
+
+        for (let iteration = 0; iteration < 100; iteration++) {
+            const middle = (lower + upper) / 2;
+
+            if (tCdf(middle, degreesOfFreedom) < probability) {
+                lower = middle;
+            } else {
+                upper = middle;
+            }
+        }
+
+        return (lower + upper) / 2;
+    }
+
     function noncentralFCdf(xValue, df1, df2, noncentrality) {
         if (noncentrality <= Number.EPSILON) {
             return fCdf(xValue, df1, df2);
@@ -397,33 +438,7 @@
         });
     }
 
-    function getBetweenEffectWeight(betweenCells) {
-        const safeBetweenCells = Math.max(2, Number(betweenCells) || 2);
-        return Math.max(
-            0.5,
-            BETWEEN_WEIGHT_COEFFICIENTS.intercept +
-                BETWEEN_WEIGHT_COEFFICIENTS.linear * safeBetweenCells +
-                BETWEEN_WEIGHT_COEFFICIENTS.quadratic * safeBetweenCells * safeBetweenCells,
-        );
-    }
-
     function getAnovaLambdaWeight(effect, factors, withinCorrelation) {
-        const modelHasWithin = getWithinFactors(factors).length > 0;
-        const modelHasBetween = getBetweenFactors(factors).length > 0;
-        const betweenCells = getBetweenCellCount(factors);
-
-        if (!modelHasWithin || !effect.hasWithin) {
-            return getBetweenEffectWeight(betweenCells);
-        }
-
-        if (!modelHasBetween) {
-            return effect.repeatedMeasureCells / Math.max(1 - withinCorrelation, 0.05);
-        }
-
-        if (effect.hasBetween) {
-            return effect.repeatedMeasureCells / Math.max(1 - withinCorrelation, 0.05);
-        }
-
         return effect.repeatedMeasureCells / Math.max(1 - withinCorrelation, 0.05);
     }
 
@@ -449,6 +464,26 @@
         };
     }
 
+    function normalizeOneWayBetweenOptions(options) {
+        return {
+            effectSizeF: Math.max(0, Number(options.effectSizeF) || 0),
+            alpha: clamp(Number(options.alpha) || DEFAULT_ALPHA, 1e-9, 0.999999999),
+            targetPower: clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 1e-9, 0.999999999),
+            numberOfGroups: Math.max(2, parseInt(options.numberOfGroups, 10) || 2),
+        };
+    }
+
+    function normalizeOneWayWithinOptions(options) {
+        return {
+            effectSizeF: Math.max(0, Number(options.effectSizeF) || 0),
+            alpha: clamp(Number(options.alpha) || DEFAULT_ALPHA, 1e-9, 0.999999999),
+            targetPower: clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 1e-9, 0.999999999),
+            numberOfMeasurements: Math.max(2, parseInt(options.numberOfMeasurements, 10) || 2),
+            corrAmongRepMeasures: clamp(Number(options.corrAmongRepMeasures) || DEFAULT_WITHIN_CORRELATION, -0.999999, 0.999999),
+            epsilon: normalizePositiveNumber(options.epsilon, 1),
+        };
+    }
+
     function alignTotalSampleSizeToGroups(totalSampleSize, numberOfGroups) {
         const groups = Math.max(2, parseInt(numberOfGroups, 10) || 2);
         const minimumSampleSize = groups * 2;
@@ -457,9 +492,136 @@
         return Math.ceil(requestedSampleSize / groups) * groups;
     }
 
+    function computeOneWayBetweenPower(options) {
+        const normalized = normalizeOneWayBetweenOptions(options);
+        const totalSampleSize = alignTotalSampleSizeToGroups(options.totalSampleSize, normalized.numberOfGroups);
+        // Exact one-way between ANOVA:
+        // df1 = g - 1
+        // df2 = N - g
+        // lambda = f^2 * N
+        const numeratorDf = normalized.numberOfGroups - 1;
+        const denominatorDf = Math.max(1, totalSampleSize - normalized.numberOfGroups);
+        const lambda = normalized.effectSizeF * normalized.effectSizeF * totalSampleSize;
+        const criticalF = invertFCdf(1 - normalized.alpha, numeratorDf, denominatorDf);
+        const actualPower = clamp(1 - noncentralFCdf(criticalF, numeratorDf, denominatorDf, lambda), 0, 1);
+
+        return {
+            sampleSize: totalSampleSize,
+            totalSampleSize: totalSampleSize,
+            lambda: lambda,
+            criticalF: criticalF,
+            criticalValue: criticalF,
+            numeratorDf: numeratorDf,
+            denominatorDf: denominatorDf,
+            df1: numeratorDf,
+            df2: denominatorDf,
+            actualPower: actualPower,
+            power: actualPower,
+        };
+    }
+
+    function estimatePowerOneWayBetweenExact(options) {
+        return computeOneWayBetweenPower(options);
+    }
+
+    function estimateSampleSizeOneWayBetweenExact(options) {
+        const normalized = normalizeOneWayBetweenOptions(options);
+        let sampleSize = normalized.numberOfGroups * 2;
+        let result = computeOneWayBetweenPower(Object.assign({}, normalized, { totalSampleSize: sampleSize }));
+        let iterations = 0;
+        const maxIterations = Math.ceil(MAX_SEARCH_PARTICIPANTS / normalized.numberOfGroups);
+
+        while (result.actualPower < normalized.targetPower && sampleSize < MAX_SEARCH_PARTICIPANTS && iterations < maxIterations) {
+            sampleSize += normalized.numberOfGroups;
+            result = computeOneWayBetweenPower(Object.assign({}, normalized, { totalSampleSize: sampleSize }));
+            iterations++;
+        }
+
+        return {
+            sampleSize: result.sampleSize,
+            totalSampleSize: result.totalSampleSize,
+            lambda: result.lambda,
+            criticalF: result.criticalF,
+            criticalValue: result.criticalValue,
+            numeratorDf: result.numeratorDf,
+            denominatorDf: result.denominatorDf,
+            df1: result.df1,
+            df2: result.df2,
+            actualPower: result.actualPower,
+            power: result.actualPower,
+        };
+    }
+
+    function computeOneWayWithinPower(options) {
+        const normalized = normalizeOneWayWithinOptions(options);
+        const totalSampleSize = Math.max(2, parseInt(options.totalSampleSize, 10) || 2);
+        // Exact repeated-measures one-way ANOVA:
+        // df1 = (m - 1) * epsilon
+        // df2 = (N - 1) * (m - 1) * epsilon
+        // lambda = f^2 * N * (m * epsilon) / (1 - r)
+        const numeratorDf = (normalized.numberOfMeasurements - 1) * normalized.epsilon;
+        const denominatorDf = Math.max(1, (totalSampleSize - 1) * (normalized.numberOfMeasurements - 1) * normalized.epsilon);
+        const lambda =
+            normalized.effectSizeF *
+            normalized.effectSizeF *
+            totalSampleSize *
+            ((normalized.numberOfMeasurements * normalized.epsilon) / Math.max(1 - normalized.corrAmongRepMeasures, 1e-9));
+        const criticalF = invertFCdf(1 - normalized.alpha, numeratorDf, denominatorDf);
+        const actualPower = clamp(1 - noncentralFCdf(criticalF, numeratorDf, denominatorDf, lambda), 0, 1);
+
+        return {
+            sampleSize: totalSampleSize,
+            totalSampleSize: totalSampleSize,
+            lambda: lambda,
+            criticalF: criticalF,
+            criticalValue: criticalF,
+            numeratorDf: numeratorDf,
+            denominatorDf: denominatorDf,
+            df1: numeratorDf,
+            df2: denominatorDf,
+            actualPower: actualPower,
+            power: actualPower,
+        };
+    }
+
+    function estimatePowerOneWayWithinExact(options) {
+        return computeOneWayWithinPower(options);
+    }
+
+    function estimateSampleSizeOneWayWithinExact(options) {
+        const normalized = normalizeOneWayWithinOptions(options);
+        let sampleSize = 2;
+        let result = computeOneWayWithinPower(Object.assign({}, normalized, { totalSampleSize: sampleSize }));
+        let iterations = 0;
+
+        while (result.actualPower < normalized.targetPower && sampleSize < MAX_SEARCH_PARTICIPANTS && iterations < MAX_SEARCH_PARTICIPANTS) {
+            sampleSize += 1;
+            result = computeOneWayWithinPower(Object.assign({}, normalized, { totalSampleSize: sampleSize }));
+            iterations++;
+        }
+
+        return {
+            sampleSize: result.sampleSize,
+            totalSampleSize: result.totalSampleSize,
+            lambda: result.lambda,
+            criticalF: result.criticalF,
+            criticalValue: result.criticalValue,
+            numeratorDf: result.numeratorDf,
+            denominatorDf: result.denominatorDf,
+            df1: result.df1,
+            df2: result.df2,
+            actualPower: result.actualPower,
+            power: result.actualPower,
+        };
+    }
+
     function computeRepeatedMeasuresWithinBetweenInteractionPower(options) {
         const normalized = normalizeRepeatedMeasuresWithinBetweenInteractionOptions(options);
         const totalSampleSize = alignTotalSampleSizeToGroups(options.totalSampleSize, normalized.numberOfGroups);
+        // Exact mixed-design interaction:
+        // df1 = (g - 1) * (m - 1) * epsilon
+        // df2 = (N - g) * (m - 1) * epsilon
+        // lambda = f^2 * N * (m * epsilon) / (1 - r)
         const numeratorDf = (normalized.numberOfGroups - 1) * (normalized.numberOfMeasurements - 1) * normalized.epsilon;
         const denominatorDf = (totalSampleSize - normalized.numberOfGroups) * (normalized.numberOfMeasurements - 1) * normalized.epsilon;
         const lambda =
@@ -489,6 +651,10 @@
         return computeRepeatedMeasuresWithinBetweenInteractionPower(options);
     }
 
+    function estimatePowerMixedInteractionExact(options) {
+        return computeRepeatedMeasuresWithinBetweenInteractionPower(options);
+    }
+
     function estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction(options) {
         const normalized = normalizeRepeatedMeasuresWithinBetweenInteractionOptions(options);
         let sampleSize = normalized.numberOfGroups * 2;
@@ -500,6 +666,8 @@
         let iterations = 0;
         const maxIterations = Math.ceil(MAX_SEARCH_PARTICIPANTS / normalized.numberOfGroups);
 
+        // Search only balanced group sizes and stop once the requested power is reached
+        // or the safety bounds are hit.
         while (result.actualPower < normalized.targetPower && sampleSize < MAX_SEARCH_PARTICIPANTS && iterations < maxIterations) {
             sampleSize += normalized.numberOfGroups;
             result = computeRepeatedMeasuresWithinBetweenInteractionPower(
@@ -525,8 +693,36 @@
         };
     }
 
+    function estimateSampleSizeMixedInteractionExact(options) {
+        return estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction(options);
+    }
+
     function hasSingleBetweenAndWithinFactor(factors) {
         return getBetweenFactors(factors).length === 1 && getWithinFactors(factors).length === 1 && factors.length === 2;
+    }
+
+    function isOneWayBetweenDesign(factors) {
+        return getBetweenFactors(factors).length === 1 && getWithinFactors(factors).length === 0 && factors.length === 1;
+    }
+
+    function isOneWayWithinDesign(factors) {
+        return getWithinFactors(factors).length === 1 && getBetweenFactors(factors).length === 0 && factors.length === 1;
+    }
+
+    function getExactAnovaEffectType(effect) {
+        if (effect.hasWithin && effect.hasBetween) {
+            return "mixed interaction";
+        }
+
+        if (effect.hasWithin) {
+            return effect.withinFactors && effect.withinFactors.length > 1 ? "within interaction" : "within";
+        }
+
+        if (effect.hasBetween) {
+            return effect.betweenFactors && effect.betweenFactors.length > 1 ? "between interaction" : "between";
+        }
+
+        return "effect";
     }
 
     function computeAnovaRowsAtSampleSize(options, totalParticipants) {
@@ -543,7 +739,53 @@
             : Math.max(2, parseInt(totalParticipants, 10) || 2);
         const subjectDfBase = Math.max(1, alignedParticipants - betweenCells);
 
+        // Route the main G*Power-like cases through explicit formulas first.
+        // Only broader factorial fallback rows continue through the generic path below.
         return buildEffectDefinitions(factors).map(function (effect) {
+            if (isOneWayBetweenDesign(factors) && !effect.hasWithin) {
+                const oneWayBetween = computeOneWayBetweenPower({
+                    effectSizeF: effectSizeF,
+                    alpha: alpha,
+                    totalSampleSize: alignedParticipants,
+                    numberOfGroups: factors[0].levels.length,
+                });
+
+                return {
+                    label: effect.label,
+                    effectType: "between",
+                    df1: oneWayBetween.df1,
+                    df2: oneWayBetween.df2,
+                    lambda: oneWayBetween.lambda,
+                    criticalValue: oneWayBetween.criticalValue,
+                    power: oneWayBetween.actualPower,
+                    cohenF: effectSizeF,
+                    partialEtaSquared: fToPartialEtaSquared(effectSizeF),
+                };
+            }
+
+            if (isOneWayWithinDesign(factors) && effect.hasWithin && !effect.hasBetween) {
+                const oneWayWithin = computeOneWayWithinPower({
+                    effectSizeF: effectSizeF,
+                    alpha: alpha,
+                    totalSampleSize: alignedParticipants,
+                    numberOfMeasurements: factors[0].levels.length,
+                    corrAmongRepMeasures: withinCorrelation,
+                    epsilon: epsilon,
+                });
+
+                return {
+                    label: effect.label,
+                    effectType: "within",
+                    df1: oneWayWithin.df1,
+                    df2: oneWayWithin.df2,
+                    lambda: oneWayWithin.lambda,
+                    criticalValue: oneWayWithin.criticalValue,
+                    power: oneWayWithin.actualPower,
+                    cohenF: effectSizeF,
+                    partialEtaSquared: fToPartialEtaSquared(effectSizeF),
+                };
+            }
+
             if (hasSingleBetweenAndWithinFactor(factors) && effect.hasBetween && effect.hasWithin) {
                 const mixedInteraction = computeRepeatedMeasuresWithinBetweenInteractionPower({
                     effectSizeF: effectSizeF,
@@ -575,7 +817,7 @@
 
             return {
                 label: effect.label,
-                effectType: effect.hasWithin && effect.hasBetween ? "mixed interaction" : effect.hasWithin ? "within" : "between",
+                effectType: getExactAnovaEffectType(effect),
                 df1: effect.df1,
                 df2: denominatorDf,
                 lambda: lambda,
@@ -652,7 +894,8 @@
         const points = [];
         const effectiveStepSize = Math.max(1, parseInt(stepSize, 10) || 1);
         const maxN = Math.min(MAX_SEARCH_PARTICIPANTS, Math.max(minimumN + 24, Math.ceil(minimumN * 1.8)));
-        const step = Math.max(effectiveStepSize, Math.ceil((maxN - effectiveStepSize) / Math.max(1, MAX_CURVE_POINTS - 2)));
+        const rawStep = Math.max(effectiveStepSize, Math.ceil((maxN - effectiveStepSize) / Math.max(1, MAX_CURVE_POINTS - 2)));
+        const step = Math.max(effectiveStepSize, Math.ceil(rawStep / effectiveStepSize) * effectiveStepSize);
 
         for (let sampleSize = effectiveStepSize; sampleSize <= maxN; sampleSize += step) {
             points.push({
@@ -688,10 +931,12 @@
 
         const targetPower = clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 0.01, 0.999);
         const groupedMixedDesign = hasSingleBetweenAndWithinFactor(factors);
-        const stepSize = groupedMixedDesign ? getBetweenCellCount(factors) : 1;
-        const minimumNFloor = groupedMixedDesign ? stepSize * 2 : Math.max(4, getBetweenCellCount(factors) + 2);
+        const exactOneWayBetween = isOneWayBetweenDesign(factors);
+        const exactOneWayWithin = isOneWayWithinDesign(factors);
+        const stepSize = groupedMixedDesign || exactOneWayBetween ? getBetweenCellCount(factors) : 1;
+        const minimumNFloor = groupedMixedDesign || exactOneWayBetween ? stepSize * 2 : exactOneWayWithin ? 2 : Math.max(4, getBetweenCellCount(factors) + 2);
         const findPowerAtSampleSize = function (sampleSize) {
-            const alignedSampleSize = groupedMixedDesign ? alignTotalSampleSizeToGroups(sampleSize, stepSize) : sampleSize;
+            const alignedSampleSize = groupedMixedDesign || exactOneWayBetween ? alignTotalSampleSizeToGroups(sampleSize, stepSize) : sampleSize;
             const rows = computeAnovaRowsAtSampleSize(options, alignedSampleSize);
             const controllingEffect = getControllingEffect(rows);
 
@@ -704,15 +949,15 @@
         const searchResult = searchMinimumSampleSize(findPowerAtSampleSize, minimumNFloor, targetPower, stepSize);
 
         return {
-            sampleSize: groupedMixedDesign ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
-            minimumN: groupedMixedDesign ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
+            sampleSize: groupedMixedDesign || exactOneWayBetween ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
+            minimumN: groupedMixedDesign || exactOneWayBetween ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
             targetPower: targetPower,
             effectRows: searchResult.result.rows,
             controllingEffect: searchResult.result.controllingEffect,
             curvePoints: includeCurvePoints
                 ? buildCurvePoints(
                       findPowerAtSampleSize,
-                      groupedMixedDesign ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
+                      groupedMixedDesign || exactOneWayBetween ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
                       stepSize,
                   )
                 : [],
@@ -769,18 +1014,25 @@
     }
 
     function computeIndependentTTest(totalParticipants, cohenD, alpha) {
-        const df2 = Math.max(1, totalParticipants - 2);
+        const balancedParticipants = Math.max(4, Math.ceil(Math.max(4, totalParticipants) / 2) * 2);
+        const participantsPerGroup = balancedParticipants / 2;
+        const df2 = Math.max(1, balancedParticipants - 2);
         const cohenF = dToF(cohenD);
-        const lambda = totalParticipants * cohenF * cohenF;
+        const delta = Math.abs(cohenD) * Math.sqrt(participantsPerGroup / 2);
+        const lambda = delta * delta;
         const powerResult = computeFPower(1, df2, lambda, alpha);
+        const criticalT = invertTCdf(1 - alpha / 2, df2);
 
         return {
-            sampleSize: totalParticipants,
+            sampleSize: balancedParticipants,
             power: powerResult.power,
             lambda: lambda,
             criticalValue: powerResult.criticalValue,
+            criticalT: criticalT,
+            delta: delta,
             df1: 1,
             df2: df2,
+            groupSampleSize: participantsPerGroup,
             cohenD: Math.abs(cohenD),
             cohenF: cohenF,
             partialEtaSquared: dToPartialEtaSquared(cohenD),
@@ -790,14 +1042,18 @@
     function computePairedTTest(totalParticipants, cohenD, withinCorrelation, alpha) {
         const df2 = Math.max(1, totalParticipants - 1);
         const dz = Math.abs(cohenD) / Math.sqrt(Math.max(2 * (1 - withinCorrelation), 0.05));
-        const lambda = totalParticipants * dz * dz;
+        const delta = dz * Math.sqrt(totalParticipants);
+        const lambda = delta * delta;
         const powerResult = computeFPower(1, df2, lambda, alpha);
+        const criticalT = invertTCdf(1 - alpha / 2, df2);
 
         return {
             sampleSize: totalParticipants,
             power: powerResult.power,
             lambda: lambda,
             criticalValue: powerResult.criticalValue,
+            criticalT: criticalT,
+            delta: delta,
             df1: 1,
             df2: df2,
             cohenD: Math.abs(cohenD),
@@ -817,7 +1073,8 @@
         const evaluate = function (sampleSize) {
             return paired ? computePairedTTest(sampleSize, cohenD, withinCorrelation, alpha) : computeIndependentTTest(sampleSize, cohenD, alpha);
         };
-        const minimumNFloor = paired ? 4 : 6;
+        const minimumNFloor = paired ? 4 : 4;
+        const stepSize = paired ? 1 : 2;
         const searchResult = searchMinimumSampleSize(
             function (sampleSize) {
                 const result = evaluate(sampleSize);
@@ -830,7 +1087,7 @@
             },
             minimumNFloor,
             targetPower,
-            1,
+            stepSize,
         );
 
         return {
@@ -847,7 +1104,7 @@
                           };
                       },
                       searchResult.minimumN,
-                      1,
+                      stepSize,
                   )
                 : [],
         };
@@ -858,7 +1115,7 @@
         const alpha = Number(options.alpha) || DEFAULT_ALPHA;
         const withinCorrelation = clamp(Number(options.withinCorrelation) || DEFAULT_WITHIN_CORRELATION, 0, 0.95);
         const cohenD = Math.abs(Number(options.cohenD) || 0);
-        const participants = Math.max(paired ? 4 : 6, parseInt(options.participants, 10) || (paired ? 4 : 6));
+        const participants = Math.max(paired ? 4 : 4, parseInt(options.participants, 10) || (paired ? 4 : 4));
 
         return paired ? computePairedTTest(participants, cohenD, withinCorrelation, alpha) : computeIndependentTTest(participants, cohenD, alpha);
     }
@@ -898,8 +1155,8 @@
                 { label: "Predictors", value: predictors },
                 { label: "Numerator df (u)", value: result.numeratorDf },
                 { label: "Denominator df (v)", value: result.denominatorDf },
-                { label: "Effect size (f^2)", value: roundTo(result.fSquared, 3) },
-                { label: "Expected R^2", value: roundTo(result.rSquared, 3) },
+                { label: "Effect size (f²)", value: roundTo(result.fSquared, 3) },
+                { label: "Expected R²", value: roundTo(result.rSquared, 3) },
                 { label: "Lambda", value: roundTo(result.lambda, 3) },
                 { label: "Power", value: roundTo(result.power * 100, 1) + "%" },
             ],
@@ -968,6 +1225,12 @@
         estimateAnovaPower: estimateAnovaPower,
         estimateAnovaModel: estimateAnovaModel,
         estimateSampleSizeForAnova: estimateSampleSizeForAnova,
+        estimatePowerOneWayBetweenExact: estimatePowerOneWayBetweenExact,
+        estimateSampleSizeOneWayBetweenExact: estimateSampleSizeOneWayBetweenExact,
+        estimatePowerOneWayWithinExact: estimatePowerOneWayWithinExact,
+        estimateSampleSizeOneWayWithinExact: estimateSampleSizeOneWayWithinExact,
+        estimatePowerMixedInteractionExact: estimatePowerMixedInteractionExact,
+        estimateSampleSizeMixedInteractionExact: estimateSampleSizeMixedInteractionExact,
         estimatePowerForRepeatedMeasuresWithinBetweenInteraction: estimatePowerForRepeatedMeasuresWithinBetweenInteraction,
         estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction: estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction,
         estimateTTestModel: estimateTTestModel,

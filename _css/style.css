@@ -384,34 +384,270 @@ label.error {
     padding-left: 0;
     margin: 0;
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.selection-list-cards,
+.selection-item {
+    width: 100%;
+}
+
+.token-input-shell {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 8px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.token-input-shell.is-invalid {
+    border-color: #dc3545;
+}
+
+.token-list {
+    display: flex;
     flex-wrap: wrap;
     gap: 8px;
 }
 
-.selection-list .btn {
+.token-input-field {
+    flex: 1 1 220px;
+    min-width: 160px;
+    border: 0;
+    box-shadow: none !important;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.token-input-field:focus {
+    outline: none;
+}
+
+.level-token,
+.selection-level-chip {
     display: inline-flex;
     align-items: center;
-    flex-wrap: wrap;
-    gap: 4px;
-    white-space: normal;
-    text-align: left;
-    min-height: 42px;
-    border-color: #d1d5db;
-    background: #fff;
-}
-
-.selection-list .list-group {
-    width: 100%;
-    margin-top: 6px;
-    gap: 4px;
-}
-
-.selection-list .list-group-item {
-    padding: 0.2rem 0.45rem;
+    gap: 6px;
+    padding: 0.35rem 0.65rem;
     border-radius: 999px;
     border: 1px solid #dbe3ee;
     background: #f8fafc;
+    font-size: 0.85rem;
+}
+
+.level-token-remove {
+    min-width: 32px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: #475569;
+}
+
+.selection-item {
+    margin: 0;
+}
+
+.selection-card {
+    display: grid;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 10px;
+    background: #fff;
+}
+
+.selection-card-iv {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.selection-card-dv {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.selection-card-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    width: 100%;
+}
+
+.selection-card-primary {
+    flex: 1 1 auto;
+}
+
+.selection-card-config {
+    width: 100%;
+}
+
+.selection-card-config .selection-field {
+    min-width: 0;
+    width: 100%;
+}
+
+.selection-card-config .form-select,
+.selection-card-config .form-control {
+    width: 100%;
+    max-width: 100%;
+}
+
+.selection-field-empty {
+    min-height: 1px;
+}
+
+.selection-card-levels {
+    grid-column: 1 / -1;
+    width: 100%;
+}
+
+.selection-copy {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.selection-name-input {
+    border: 0;
+    padding: 0;
+    font-family: Roboto-Medium, Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #111827;
+    background: transparent;
+    box-shadow: none !important;
+    min-height: 32px;
+    resize: none;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.35;
+}
+
+.selection-title-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-wrap: nowrap;
+    width: 100%;
+}
+
+.selection-title {
+    font-family: Roboto-Medium, Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #111827;
+}
+
+.selection-meta,
+.selection-levels,
+.selection-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.selection-inline-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 10px;
+}
+
+.selection-inline-controls-stack {
+    display: block;
+}
+
+.selection-field {
+    min-width: 150px;
+}
+
+.selection-field-grow {
+    flex: 1 1 auto;
+}
+
+.selection-field-label {
+    display: block;
+    margin-bottom: 4px;
     font-size: 0.8rem;
+    color: #475569;
+}
+
+.selection-meta {
+    margin-top: 6px;
+}
+
+.selection-levels {
+    margin-top: 8px;
+    gap: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    width: 100%;
+}
+
+.selection-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    background: #eaf1fb;
+    color: #0f172a;
+    font-size: 0.78rem;
+}
+
+.selection-actions {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: 4px;
+    width: 100%;
+}
+
+.selection-actions .btn {
+    min-width: 32px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 6px;
+    font-size: 0.8rem;
+}
+
+.selection-item.dragging .selection-card {
+    opacity: 0.7;
+}
+
+.selection-item.drag-over .selection-card {
+    border-top: 3px solid #0d6efd;
+}
+
+.selection-item.drag-over-after .selection-card {
+    border-bottom: 3px solid #0d6efd;
+}
+
+.selection-level-chip .selection-level-remove,
+.selection-level-remove {
+    min-width: 28px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #475569;
+}
+
+.selection-level-input {
+    width: 100%;
+    max-width: none;
+}
+
+#addIV,
+#addDV {
+    width: 100%;
 }
 
 .metrics-panel .metric-row + .metric-row {
@@ -520,6 +756,21 @@ label.error {
     background: #f8fafc;
 }
 
+.power-output-table {
+    font-size: 0.9rem;
+}
+
+.power-output-table th,
+.power-output-table td {
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.power-output-table .anova-target-power-input {
+    min-width: 72px;
+    font-size: 0.9rem;
+}
+
 .chart-shell {
     position: relative;
     width: 100%;
@@ -535,6 +786,30 @@ label.error {
     color: #6b7280;
 }
 
+.formula-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    line-height: 1.55;
+}
+
+.formula-stack p {
+    margin: 0;
+}
+
+.formula-stack math {
+    display: block;
+    padding: 0.9rem 1rem;
+    border: 1px solid #dbe3ee;
+    border-radius: 10px;
+    background: #f8fafc;
+    font-size: 1.18rem;
+    overflow-x: auto;
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 @media (max-width: 991.98px) {
     .example-actions .btn {
         min-width: 0;
@@ -543,5 +818,20 @@ label.error {
 
     .range-control input[type="range"] {
         min-width: 100%;
+    }
+
+    .selection-card {
+        grid-template-columns: 1fr;
+    }
+
+    .selection-card-config {
+        width: 100%;
+        flex: 1 1 auto;
+    }
+
+    .selection-actions {
+        width: 100%;
+        flex-direction: row;
+        justify-content: flex-end;
     }
 }
