@@ -1,0 +1,24 @@
+Package: studydesignplanner
+Type: Package
+Title: Study Design Planner
+Version: 0.1.1
+Authors@R: person(given = "Valentin", family = "Schwind", email = "mail@vali.de", role = c("aut", "cre"))
+Description: R procedures for study and statistical test planning.
+    Includes helper functions for sample-size and power estimation.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    pwr,
+    Superpower,
+    stats
+Suggests:
+    covr,
+    ggplot2,
+    jmvcore,
+    knitr,
+    rmarkdown,
+    scales,
+    spelling,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

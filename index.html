@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+    <meta name="author" content="Valentin Schwind" />
+
+    <link rel="stylesheet" href="_css/bootstrap.min.css" />
+    <link rel="stylesheet" href="_css/bootstrap-table.min.css" />
+    <link rel="stylesheet" href="_css/bootstrap-icons.css" />
+    <link rel="stylesheet" href="_css/style.css" />
+    <link rel="shortcut icon" href="favicon.ico" type="image/x-icon" />
+
+    <meta property="og:site_name" content="Study Design and Statistical Test Planner" />
+    <title>Study Design and Statistical Test Planner</title>
+</head>
+<body>
+    <script src="_js/jquery-3.6.0.min.js"></script>
+    <script src="_js/bootstrap.bundle.min.js"></script>
+    <script src="_js/bootstrap-table.min.js"></script>
+    <script src="_js/seedrandom.min.js"></script>
+    <script src="_js/statistics.min.js"></script>
+    <script src="_js/power-engine.js"></script>
+
+    <div class="page-shell">
+        <div id="mainFrame" class="container page-card rounded">
+            <div id="demographicsPage">
+                <div id="input">
+                    <header class="page-header">
+                        <div class="logo-row">
+                            <a href="https://hci-studies.org/" target="_blank" rel="noopener noreferrer">
+                                <img src="_img/hdmlogo.png" class="header-logo" alt="HdM logo" width="72" style="width: 72px; min-width: 72px; max-width: 72px; height: auto;" />
+                            </a>
+                        </div>
+
+                        <p class="kicker"><a href="https://hci-studies.org/" target="_blank" rel="noopener noreferrer">HOME</a> &gt;&gt; HCI User Studies Toolkit</p>
+
+                        <h1 id="demographicsTitle">Study Design and Statistical Test Planner</h1>
+
+                        <p class="intro">
+                            This tool is designed to plan and evaluate your study for HCI research. Enter your independent and dependent variables, estimate the difference between extreme measures and their pooled standard deviation, and use the resulting guidance to prepare an appropriate design and statistical testing strategy. The planner runs its core power-related estimates directly in the browser using simulation-based approximations inspired by common ANOVA and regression workflows. It offers quick-start guidance and does not replace careful methodological planning or supervisory input.
+                        </p>
+                    </header>
+
+                    <section class="content-section">
+                        <div class="section-heading">
+                            <h2>Study Setup</h2>
+                        </div>
+                        <p class="section-intro">Describe your independent and dependent variables first. The planner keeps your workflow and reveals the remaining estimation controls when they become relevant.</p>
+
+                        <div class="config-panel">
+                            <form id="IVForm" class="form-horizontal tool-form" action="javascript:generate(this);">
+                                <div class="row mt-1 align-items-center">
+                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectIVText">Add your independent variables (IV)?</span><span class="text-danger">*</span></div>
+                                    <div class="col-lg-2 col-md-4"><input class="form-control" name="nameIV" required /></div>
+                                    <div class="col-lg-5 col-md-6"><select class="form-control" name="selectIVType" required></select></div>
+                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" type="submit" id="addIV">Add</button></div>
+                                </div>
+                                <div class="row mt-3 align-items-center" id="withinIV">
+                                    <div class="col-lg-4 d-none d-lg-block"></div>
+                                    <div class="col-lg-2 col-md-4 form-label-column"><span>IV design</span></div>
+                                    <div class="col-lg-5 col-md-8"><select class="form-control" name="selectIVwithin" required></select></div>
+                                </div>
+                                <div class="row mt-3 align-items-center" id="levelsIV">
+                                    <div class="col-lg-4 d-none d-lg-block"></div>
+                                    <div class="col-lg-2 col-md-4 form-label-column"><span>With levels</span></div>
+                                    <div class="col-lg-5 col-md-8"><input class="form-control" name="enterLevelsIV" required /></div>
+                                </div>
+                                <div class="row mt-3 align-items-start">
+                                    <div class="col-lg-4 d-none d-lg-block"></div>
+                                    <div class="col-lg-8 col-md-12"><ul class="selection-list" id="listIV"></ul></div>
+                                </div>
+                            </form>
+
+                            <form id="DVForm" class="form-horizontal tool-form" action="javascript:generate(this);">
+                                <div class="row mt-3 align-items-center" id="rowDV">
+                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectDVText">Add your dependent variables (DV)?</span><span class="text-danger">*</span></div>
+                                    <div class="col-lg-2 col-md-4"><input class="form-control" name="nameDV" /></div>
+                                    <div class="col-lg-5 col-md-6"><select class="form-control" name="selectDVType"></select></div>
+                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" id="addDV">Add</button></div>
+                                    <div class="col-lg-4 d-none d-lg-block"></div>
+                                    <div class="col-lg-8 col-md-12 mt-3"><ul class="selection-list" id="listDV"></ul></div>
+                                </div>
+                            </form>
+                        </div>
+                    </section>
+
+                    <section class="content-section" id="estimationControlsSection">
+                        <div class="section-heading">
+                            <h2>Estimation Controls</h2>
+                        </div>
+                        <p class="section-intro">Tune the assumed effect size, variance and sample size. These controls provide an approximate starting point for planning and should be interpreted in the context of your specific within-, between- or mixed-design setup.</p>
+
+                        <div class="config-panel metrics-panel">
+                            <div class="row mt-1 metric-row" id="cellDeltaMeans">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Estimated mean difference between min. and max. measures (in %):</span></div>
+                                <div class="col-lg-8 col-md-12">
+                                    <form name="sampleForm">
+                                        <div class="range-control">
+                                            <input type="range" name="meanDeltaInputName" id="meanDeltaInputId" value="0.20" min="0.01" max="1" step="0.01" oninput="effectsizeOutputId.value = Math.floor((meanDeltaInputId.value * 100),0) + ' %'" />
+                                            <output name="effectsizeOutputName" id="effectsizeOutputId">20 %</output>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellVariance">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Estimated pooled standard deviation (in % of the mean difference):</span></div>
+                                <div class="col-lg-8 col-md-12">
+                                    <form name="sampleForm">
+                                        <div class="range-control">
+                                            <input type="range" name="varianceInputName" id="varianceInputId" value="0.4" min="0" max="1" step="0.01" oninput="varianceOutputId.value = Math.floor((varianceInputId.value * 100),0) + ' %'" />
+                                            <output name="varianceOutputName" id="varianceOutputId">40 %</output>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellEffectSize">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Estimated initial effect sizes:</span></div>
+                                <div class="col-lg-8 col-md-12" id="effectSizeLabel"></div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellSampleSize">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Estimated sample size for this design:</span></div>
+                                <div class="col-lg-8 col-md-12">
+                                    <div id="sampleSizePleaseWait">Please wait...</div>
+                                    <div class="mt-3" id="sampleSizeSlider">
+                                        <form name="sampleForm">
+                                            <div class="range-control">
+                                                <input type="range" name="samplesInputName" id="samplesInputId" value="0" min="0" max="200" oninput="samplesOutputId.value = samplesInputId.value" />
+                                                <output name="samplesOutputName" id="samplesOutputId">0</output>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellEquivalence">
+                                <div class="col-lg-4 d-none d-lg-block"></div>
+                                <div class="col-lg-8 col-md-12 checkbox-row"><input type="checkbox" class="form-check-input me-2" name="equivalenceCheckBox" id="equivalenceCheckBox" /><label class="form-check-label" for="equivalenceCheckBox">Include test for equivalence (non-inferiority)</label></div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellMANOVA">
+                                <div class="col-lg-4 d-none d-lg-block"></div>
+                                <div class="col-lg-8 col-md-12 checkbox-row"><input type="checkbox" class="form-check-input me-2" name="manovaCheckBox" id="manovaCheckBox" /><label class="form-check-label" for="manovaCheckBox">Include test for effects <i>across</i> all DVs (MANOVA avoids Type-1 errors with too many DVs)</label></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="content-section" id="resultsGuidanceSection">
+                        <div class="section-heading">
+                            <h2>Results and Guidance</h2>
+                        </div>
+                        <p class="section-intro">Use the generated interpretation as a starting point for discussing design choices, required sample sizes and appropriate statistical tests with your supervisor or research team.</p>
+
+                        <div class="table-card results-card">
+                            <div class="row" id="rowWAITContainer">
+                                <div class="col-12"><h5 class="status-text text-center" id="rowWAIT"></h5></div>
+                            </div>
+                            <div id="resultsPanel">
+                                <div class="row mb-3" id="rowES">
+                                    <div class="col-12 section-block-title"><h5>Statistical Power and Effect Sizes</h5></div>
+                                    <div class="col-12 content-output"><span id="power"></span></div>
+                                </div>
+                                <div class="row mb-3" id="rowED">
+                                    <div class="col-12 section-block-title"><h5>Instructions for your experimental design</h5></div>
+                                    <div class="col-12 content-output"><span id="design"></span></div>
+                                </div>
+                                <div class="row mb-0" id="rowST">
+                                    <div class="col-12 section-block-title"><h5>Instructions for your statistical test(s)</h5></div>
+                                    <div class="col-12 content-output"><div id="results"></div></div>
+                                </div>
+                            </div>
+                        </div>
+
+                    </section>
+
+                    <section class="content-section">
+                        <div class="resource-list helper-list">
+                            <div class="resource-list helper-list">
+								<div class="resource-item d-flex flex-column align-items-stretch">
+									<div class="resource-text">
+										<h3>Example Study Setups</h3>
+										<p>Load one of the built-in examples to inspect how the planner configures within-subject, mixed-design and regression scenarios.</p>
+									</div>
+									<div class="resource-actions d-flex flex-wrap justify-content-start mt-2">
+										<a id="btnExample2x3Within" class="btn btn-secondary btn-md" role="button">Example 2x3 Within-Subject Design</a>
+										<a id="btnExample2x4Mixed" class="btn btn-secondary btn-md" role="button">Example 2x4 Mixed-Design</a>
+										<a id="btnExampleRegression" class="btn btn-secondary btn-md" role="button">Example Regression</a>
+									</div>
+								</div>
+							</div>
+                        </div>
+                    </section>
+
+                    <section class="content-section">
+                        <div class="section-heading">
+                            <h2>Source Code</h2>
+                        </div>
+                        <p class="section-intro">Project repository and maintenance entry point for the published GitHub Pages version of the planner.</p>
+
+                        <div class="resource-list">
+                            <div class="resource-item" id="githublink">
+                                <div class="resource-text">
+                                    <h3>Study Design Planner Repository</h3>
+                                    <p><a href="https://github.com/valentin-schwind/study-design-planner" target="_blank" rel="noopener noreferrer">Source code on GitHub</a> for the planner and its GitHub Pages deployment.</p>
+                                </div>
+                                <div class="resource-actions">
+                                    <a href="https://github.com/valentin-schwind/study-design-planner" target="_blank" rel="noopener noreferrer" class="btn btn-primary" role="button">GitHub</a>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <footer class="site-footer">
+                        <p>
+                            <a href="https://valentin-schwind.de" target="_blank" rel="noopener noreferrer">Prof. Dr. Valentin Schwind</a>. University of Applied Sciences Frankfurt. No liability for external links, correctness, completeness and up-to-dateness of any content. Site visits might result in storing anonymized data (date, time, page viewed). Utilization at the user's own risk. Data can be stored on the computers to facilitate the user's website access. Contribute <a href="https://github.com/stars/valentin-schwind/lists/hci-user-studies-toolkit" target="_blank" rel="noopener noreferrer">here</a>.
+                        </p>
+                        <p>
+                            <strong>Find/cite the publication of the toolkit here:</strong><br />
+                            <code>
+                                Valentin Schwind, Stefan Resch, and Jessica Sehrt. 2023. The HCI User Studies Toolkit: Supporting Study Designing and Planning for Undergraduates and Novice Researchers in Human-Computer Interaction. In Extended Abstracts of the 2023 CHI Conference on Human Factors in Computing Systems (CHI EA '23), April 23-28, 2023, Hamburg, Germany. ACM, New York, NY, USA, 7 pages.
+                                <a href="https://doi.org/10.1145/3544549.3585890" target="_blank" rel="noopener noreferrer">https://doi.org/10.1145/3544549.3585890</a>
+                            </code>
+                        </p>
+                    </footer>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="_js/planner-app.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,4 @@
+export(estimateInitialSampleSize)
+export(powerANOVA)
+export(powerRegression)
+export(sampleSize)
