@@ -2,3 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
+Superpower/
+testdata/
+node_modules/
+.tmp-chrome/

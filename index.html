@@ -21,6 +21,7 @@
     <script src="_js/bootstrap-table.min.js"></script>
     <script src="_js/seedrandom.min.js"></script>
     <script src="_js/statistics.min.js"></script>
+    <script src="_js/vendor/chart.umd.min.js"></script>
     <script src="_js/power-engine.js"></script>
 
     <div class="page-shell">
@@ -45,17 +46,17 @@
 
                     <section class="content-section">
                         <div class="section-heading">
-                            <h2>Study Setup</h2>
+                            <h2><i class="bi bi-ui-checks-grid me-2"></i>Study Setup</h2>
                         </div>
                         <p class="section-intro">Describe your independent and dependent variables first. The planner keeps your workflow and reveals the remaining estimation controls when they become relevant.</p>
 
                         <div class="config-panel">
-                            <form id="IVForm" class="form-horizontal tool-form" action="javascript:generate(this);">
+                            <form id="IVForm" class="form-horizontal tool-form">
                                 <div class="row mt-1 align-items-center">
-                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectIVText">Add your independent variables (IV)?</span><span class="text-danger">*</span></div>
+                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectIVText"><i class="bi bi-diagram-3 me-2"></i>Add your independent variables (IV)?</span><span class="text-danger">*</span></div>
                                     <div class="col-lg-2 col-md-4"><input class="form-control" name="nameIV" required /></div>
                                     <div class="col-lg-5 col-md-6"><select class="form-control" name="selectIVType" required></select></div>
-                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" type="submit" id="addIV">Add</button></div>
+                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" type="button" id="addIV">Add</button></div>
                                 </div>
                                 <div class="row mt-3 align-items-center" id="withinIV">
                                     <div class="col-lg-4 d-none d-lg-block"></div>
@@ -73,12 +74,12 @@
                                 </div>
                             </form>
 
-                            <form id="DVForm" class="form-horizontal tool-form" action="javascript:generate(this);">
+                            <form id="DVForm" class="form-horizontal tool-form">
                                 <div class="row mt-3 align-items-center" id="rowDV">
-                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectDVText">Add your dependent variables (DV)?</span><span class="text-danger">*</span></div>
+                                    <div class="col-lg-4 col-md-12 form-label-column"><span id="selectDVText"><i class="bi bi-clipboard-data me-2"></i>Add your dependent variables (DV)?</span><span class="text-danger">*</span></div>
                                     <div class="col-lg-2 col-md-4"><input class="form-control" name="nameDV" /></div>
                                     <div class="col-lg-5 col-md-6"><select class="form-control" name="selectDVType"></select></div>
-                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" id="addDV">Add</button></div>
+                                    <div class="col-lg-1 col-md-2 d-grid"><button class="btn btn-primary btn-md" type="button" id="addDV">Add</button></div>
                                     <div class="col-lg-4 d-none d-lg-block"></div>
                                     <div class="col-lg-8 col-md-12 mt-3"><ul class="selection-list" id="listDV"></ul></div>
                                 </div>
@@ -88,7 +89,7 @@
 
                     <section class="content-section" id="estimationControlsSection">
                         <div class="section-heading">
-                            <h2>Estimation Controls</h2>
+                            <h2><i class="bi bi-sliders me-2"></i>Estimation Controls</h2>
                         </div>
                         <p class="section-intro">Tune the assumed effect size, variance and sample size. These controls provide an approximate starting point for planning and should be interpreted in the context of your specific within-, between- or mixed-design setup.</p>
 
@@ -111,6 +112,50 @@
                                         <div class="range-control">
                                             <input type="range" name="varianceInputName" id="varianceInputId" value="0.4" min="0" max="1" step="0.01" oninput="varianceOutputId.value = Math.floor((varianceInputId.value * 100),0) + ' %'" />
                                             <output name="varianceOutputName" id="varianceOutputId">40 %</output>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellEffectMode">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Primary effect size input:</span></div>
+                                <div class="col-lg-8 col-md-12">
+                                    <div class="row g-2 align-items-center">
+                                        <div class="col-md-5">
+                                            <select class="form-control" id="effectSizeModeId">
+                                                <option value="means">Min/max means + pooled SD</option>
+                                                <option value="d">Cohen's d</option>
+                                                <option value="f">Cohen's f</option>
+                                                <option value="eta">Partial eta squared</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <input class="form-control" id="effectSizeInputId" type="number" min="0" step="0.001" value="0.250" />
+                                        </div>
+                                        <div class="col-md-3 d-grid">
+                                            <button class="btn btn-outline-secondary" type="button" id="btnMediumEffect">Medium</button>
+                                        </div>
+                                    </div>
+                                    <small class="text-muted d-block mt-2" id="effectSizeModeHint">For multifactor ANOVAs, Cohen's d is treated as a two-condition reference contrast; Cohen's f and partial eta squared define the omnibus model effect.</small>
+                                </div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellTargetPower">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Target statistical power:</span></div>
+                                <div class="col-lg-8 col-md-12">
+                                    <form name="powerForm">
+                                        <div class="range-control">
+                                            <input type="range" name="targetPowerInputName" id="targetPowerInputId" value="0.80" min="0.5" max="0.99" step="0.01" oninput="targetPowerOutputId.value = Math.round(targetPowerInputId.value * 100) + ' %'" />
+                                            <output name="targetPowerOutputName" id="targetPowerOutputId">80 %</output>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
+                            <div class="row mt-3 metric-row" id="cellWithinCorrelation">
+                                <div class="col-lg-4 col-md-12 metric-label"><span>Correlation among repeated measures:</span></div>
+                                <div class="col-lg-8 col-md-12">
+                                    <form name="withinCorrelationForm">
+                                        <div class="range-control">
+                                            <input type="range" name="withinCorrelationInputName" id="withinCorrelationInputId" value="0.50" min="0" max="0.95" step="0.01" oninput="withinCorrelationOutputId.value = withinCorrelationInputId.value" />
+                                            <output name="withinCorrelationOutputName" id="withinCorrelationOutputId">0.5</output>
                                         </div>
                                     </form>
                                 </div>
@@ -146,7 +191,7 @@
 
                     <section class="content-section" id="resultsGuidanceSection">
                         <div class="section-heading">
-                            <h2>Results and Guidance</h2>
+                            <h2><i class="bi bi-graph-up-arrow me-2"></i>Results and Guidance</h2>
                         </div>
                         <p class="section-intro">Use the generated interpretation as a starting point for discussing design choices, required sample sizes and appropriate statistical tests with your supervisor or research team.</p>
 
@@ -177,13 +222,13 @@
                             <div class="resource-list helper-list">
 								<div class="resource-item d-flex flex-column align-items-stretch">
 									<div class="resource-text">
-										<h3>Example Study Setups</h3>
+										<h3><i class="bi bi-stars me-2"></i>Example Study Setups</h3>
 										<p>Load one of the built-in examples to inspect how the planner configures within-subject, mixed-design and regression scenarios.</p>
 									</div>
 									<div class="resource-actions d-flex flex-wrap justify-content-start mt-2">
-										<a id="btnExample2x3Within" class="btn btn-secondary btn-md" role="button">Example 2x3 Within-Subject Design</a>
-										<a id="btnExample2x4Mixed" class="btn btn-secondary btn-md" role="button">Example 2x4 Mixed-Design</a>
-										<a id="btnExampleRegression" class="btn btn-secondary btn-md" role="button">Example Regression</a>
+										<a id="btnExample2x3Within" class="btn btn-secondary btn-md" role="button"><i class="bi bi-shuffle me-2"></i>Example 2x3 Within-Subject Design</a>
+										<a id="btnExample2x4Mixed" class="btn btn-secondary btn-md" role="button"><i class="bi bi-grid-3x3-gap me-2"></i>Example 2x4 Mixed-Design</a>
+										<a id="btnExampleRegression" class="btn btn-secondary btn-md" role="button"><i class="bi bi-scatter-chart me-2"></i>Example Regression</a>
 									</div>
 								</div>
 							</div>
@@ -192,14 +237,14 @@
 
                     <section class="content-section">
                         <div class="section-heading">
-                            <h2>Source Code</h2>
+                            <h2><i class="bi bi-github me-2"></i>Source Code</h2>
                         </div>
                         <p class="section-intro">Project repository and maintenance entry point for the published GitHub Pages version of the planner.</p>
 
                         <div class="resource-list">
                             <div class="resource-item" id="githublink">
                                 <div class="resource-text">
-                                    <h3>Study Design Planner Repository</h3>
+                                    <h3><i class="bi bi-code-square me-2"></i>Study Design Planner Repository</h3>
                                     <p><a href="https://github.com/valentin-schwind/study-design-planner" target="_blank" rel="noopener noreferrer">Source code on GitHub</a> for the planner and its GitHub Pages deployment.</p>
                                 </div>
                                 <div class="resource-actions">

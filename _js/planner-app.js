@@ -12,6 +12,9 @@ let debug = false; // Flag for enabling debug mode
 		let sampleSizeReady = false; // Flag for completed sample size estimation
 		let lastAnovaPowerResult = null;
 		let lastRegressionPowerResult = null;
+		let lastTTestPowerResult = null;
+		let powerChartInstance = null;
+		let plannerUpdateSuspended = false;
 		const simulations = 24;
 	
 		// Resets study design to its initial state
@@ -86,10 +89,101 @@ let debug = false; // Flag for enabling debug mode
 		function getCurrentPooledSd() {
 			return parseFloat($("#varianceInputId").val());
 		}
+
+		function getTargetPower() {
+			return 0.8;
+		}
+
+		function getEffectInputMode() {
+			return $("#effectSizeModeId").val() || "means";
+		}
+
+		function isTTestScenario() {
+			return hasNominalFactors() && studyDesign.nonOrdinalIVs.length === 0 && studyDesign.DVs.length === 1 && studyDesign.IVs.length === 1 && studyDesign.IVs[0].type === "N" && studyDesign.IVs[0].levels.length === 2;
+		}
+
+		function getPrimaryAnalysisKind() {
+			if (isTTestScenario()) {
+				return "ttest";
+			}
+
+			if (hasNominalFactors()) {
+				return "anova";
+			}
+
+			if (hasRegressionPredictors()) {
+				return "regression";
+			}
+
+			return "none";
+		}
+
+		function resolveEffectSizes() {
+			const effectMode = getEffectInputMode();
+			const meanDelta = parseFloat($("#meanDeltaInputId").val() || "0");
+			const pooledSD = Math.max(parseFloat($("#varianceInputId").val() || "0.001"), 0.001);
+			const directValue = Math.max(parseFloat($("#effectSizeInputId").val() || "0"), 0);
+			let cohensD = 0;
+			let cohensF = 0;
+			let partialEtaSquared = 0;
+			let note = "";
+
+			if (effectMode === "d") {
+				cohensD = directValue;
+				cohensF = StudyPowerEngine.dToF(cohensD);
+				partialEtaSquared = StudyPowerEngine.dToPartialEtaSquared(cohensD);
+				note = "Converted from Cohen's d using the two-condition reference mapping.";
+			} else if (effectMode === "f") {
+				cohensF = directValue;
+				partialEtaSquared = StudyPowerEngine.fToPartialEtaSquared(cohensF);
+				cohensD = StudyPowerEngine.fToD(cohensF);
+				note = "Omnibus ANOVA effect size input.";
+			} else if (effectMode === "eta") {
+				partialEtaSquared = Math.min(directValue, 0.999);
+				cohensF = StudyPowerEngine.partialEtaSquaredToF(partialEtaSquared);
+				cohensD = StudyPowerEngine.partialEtaSquaredToD(partialEtaSquared);
+				note = "Converted from partial eta squared.";
+			} else {
+				cohensD = getCohensD(meanDelta, pooledSD);
+				cohensF = StudyPowerEngine.dToF(cohensD);
+				partialEtaSquared = StudyPowerEngine.fToPartialEtaSquared(cohensF);
+				note = "Derived from the current min/max mean difference and pooled SD.";
+			}
+
+			return {
+				mode: effectMode,
+				meanDelta: meanDelta,
+				pooledSD: pooledSD,
+				cohensD: Math.max(0, cohensD),
+				cohensF: Math.max(0, cohensF),
+				partialEtaSquared: Math.max(0, partialEtaSquared),
+				note: note
+			};
+		}
+
+		function computeTTestPowerAtSampleSize(participants, cohensD, paired, withinCorrelation) {
+			let result = StudyPowerEngine.estimateTTestPower({
+				participants: participants,
+				cohenD: cohensD,
+				paired: paired,
+				withinCorrelation: withinCorrelation,
+				alpha: 0.05
+			});
+			result.label = paired ? "Paired t-test" : "Independent t-test";
+			return result;
+		}
 		 
 		$(document).ready(function() { 
 			resetStudyDesign();
 			updateSectionVisibility();
+
+			$("#IVForm").on("submit", function(event) {
+				event.preventDefault();
+			});
+
+			$("#DVForm").on("submit", function(event) {
+				event.preventDefault();
+			});
 			
 			$("#levelsIV").hide();
 			$("#withinIV").hide();
@@ -106,6 +200,9 @@ let debug = false; // Flag for enabling debug mode
 			$("#cellEquivalence").hide();
 			$("#cellSampleSize").hide();
 			$("#cellVariance").hide();
+			$("#cellEffectMode").hide();
+			$("#cellTargetPower").hide();
+			$("#cellWithinCorrelation").hide();
 			$("#cellEffectSize").hide();
 			$("#cellDeltaMeans").hide();
 			
@@ -177,7 +274,69 @@ let debug = false; // Flag for enabling debug mode
 				manualUpdate(); 
 			});
 
+			$("#effectSizeModeId").change(function() {
+				updateEffectInputControls();
+				manualUpdate();
+			});
+
+			$("#effectSizeInputId").change(function() {
+				manualUpdate();
+			});
+
+			$("#btnMediumEffect").click(function() {
+				const effectMode = getEffectInputMode();
+
+				if (effectMode === "d") {
+					$("#effectSizeInputId").val("0.500");
+				} else if (effectMode === "eta") {
+					$("#effectSizeInputId").val("0.059");
+				} else if (effectMode === "f") {
+					$("#effectSizeInputId").val("0.250");
+				} else {
+					$("#meanDeltaInputId").val("0.20");
+					$("#effectsizeOutputId").val("20 %");
+					$("#varianceInputId").val("0.40");
+					$("#varianceOutputId").val("40 %");
+				}
+
+				manualUpdate();
+			});
+
+			function updateEffectInputControls() {
+				const effectMode = getEffectInputMode();
+				const usesMeanVariance = effectMode === "means";
+				const hasWithin = studyDesign && studyDesign.withinIVs && studyDesign.withinIVs.length > 0;
+
+				$("#cellDeltaMeans").toggle(usesMeanVariance);
+				$("#cellVariance").toggle(usesMeanVariance);
+				$("#cellWithinCorrelation").hide();
+				$("#cellTargetPower").hide();
+
+				if(hasWithin) {
+					$("#withinCorrelationInputId").val("0.50");
+					$("#withinCorrelationOutputId").val("0.5");
+				}
+
+				$("#targetPowerInputId").val("0.80");
+				$("#targetPowerOutputId").val("80 %");
+
+				if (effectMode === "d") {
+					$("#effectSizeInputId").val($("#effectSizeInputId").val() || "0.500");
+					$("#effectSizeModeHint").text("Cohen's d is exact for the paired and independent two-condition tests. For multifactor ANOVAs it is shown as a two-condition reference contrast.");
+				} else if (effectMode === "eta") {
+					$("#effectSizeModeHint").text("Partial eta squared defines the omnibus ANOVA effect directly.");
+				} else if (effectMode === "f") {
+					$("#effectSizeModeHint").text("Cohen's f defines the omnibus ANOVA effect directly and is closest to the G-Power reference exports.");
+				} else {
+					$("#effectSizeModeHint").text("The planner derives a reference contrast effect from the current min/max mean difference and pooled SD.");
+				}
+			}
+
 			function manualUpdate() {
+				if(plannerUpdateSuspended) {
+					return;
+				}
+
 				clearOutputAndWait();
 				refreshPlanner();
 			}
@@ -284,6 +443,9 @@ let debug = false; // Flag for enabling debug mode
 					$("#rowDV").hide();
 					$("#cellSampleSize").hide();
 					$("#cellVariance").hide();
+					$("#cellEffectMode").hide();
+					$("#cellTargetPower").hide();
+					$("#cellWithinCorrelation").hide();
 					$("#cellEffectSize").hide();
 					$("#cellDeltaMeans").hide();
 					$("#cellMANOVA").hide();
@@ -294,13 +456,18 @@ let debug = false; // Flag for enabling debug mode
 				}	 	 
 				
 				if(studyDesign.DVs.length > 0 && studyDesign.IVs.length > 0){  
+					$("#cellEffectMode").show();
 					$("#cellVariance").show();
 					$("#cellEffectSize").show();
 					$("#cellDeltaMeans").show();
 					$("#cellSampleSize").show();
+					updateEffectInputControls();
 				} else {
 					$("#cellSampleSize").hide();
 					$("#cellVariance").hide();
+					$("#cellEffectMode").hide();
+					$("#cellTargetPower").hide();
+					$("#cellWithinCorrelation").hide();
 					$("#cellEffectSize").hide();
 					$("#cellDeltaMeans").hide();
 					$("#cellMANOVA").hide(); 
@@ -369,6 +536,10 @@ let debug = false; // Flag for enabling debug mode
 			}); 
 			 
 			function refreshPlanner(){ 
+				if(plannerUpdateSuspended) {
+					return;
+				}
+
 				if(studyDesign.DVs.length > 0){ 
 					$("input[name='nameDV']").prop("required", false); 
 					$("select[name='selectDVType']").prop("required", false); 						
@@ -456,40 +627,42 @@ let debug = false; // Flag for enabling debug mode
 				sampleSize = estimateInitialSampleSizeLocally();  
 			}
 			  
+			updateEffectInputControls();
 			if(debug) $("#btnExample2x3Within").click();
 		});  
+
+		function runExampleSetup(setupCallback) {
+			plannerUpdateSuspended = true;
+
+			try {
+				resetStudyDesign();
+				$('[id*=buttonDV_]').each(function() { $(this).click(); });
+				$('[id*=buttonIV_]').each(function() { $(this).click(); });
+				setupCallback();
+			} finally {
+				plannerUpdateSuspended = false;
+			}
+
+			$("#meanDeltaInputId").trigger("change");
+		}
 		
 		function setEffectSizes() {
-			let meanDelta = parseFloat($("#meanDeltaInputId").val());			    
-			let pooledSD = $("#varianceInputId").val();			 	    
-			
-			let cohensD = getCohensD(meanDelta, pooledSD).toFixed(3); 	 
-			let cohensF = getCohensF(meanDelta, pooledSD).toFixed(3); 	 
-			let partialEtaSq = getPartialEtaSquared(meanDelta, pooledSD).toFixed(3); 		 
+			let effectSizes = resolveEffectSizes();
+			let cohensD = effectSizes.cohensD.toFixed(3);
+			let cohensF = effectSizes.cohensF.toFixed(3);
+			let partialEtaSq = effectSizes.partialEtaSquared.toFixed(3);
+			let text = "Cohen's <i>d</i> = " + cohensD + " <i>(" + interpretCohensd(parseFloat(cohensD)) + ")</i>, Cohen's <i>f</i> = " + cohensF + " <i>(" + interpretCohensf(parseFloat(cohensF)) + ")</i>, <i>&eta;<sub>p</sub><sup>2</sup></i> = " + partialEtaSq + " <i>(" + interpretPartialEtaSquared(parseFloat(partialEtaSq)) + ")</i>";
 
 			if (hasNominalFactors()) {
-				let anovaEffectSizes = StudyPowerEngine.estimateAnovaEffectSizes({
-					factors: getNominalFactors(),
-					delta: meanDelta,
-					sd: pooledSD,
-					alpha: 0.05,
-					withinCorrelation: getCurrentWithinCorrelation(),
-					totalParticipants: Math.max(2, studyDesign && studyDesign.allConditions ? studyDesign.allConditions.length : 2)
-				});
+				text += "<br /><small>" + effectSizes.note + "</small>";
+			}
 
-				if (anovaEffectSizes.representative) {
-					cohensF = anovaEffectSizes.representative.cohenF.toFixed(3);
-					partialEtaSq = anovaEffectSizes.representative.partialEtaSquared.toFixed(3);
-				}
+			if (hasRegressionPredictors()) {
+				let rSquared = (effectSizes.cohensF * effectSizes.cohensF) / (1 + effectSizes.cohensF * effectSizes.cohensF);
+				text += "<br /><small>Reference regression effect: <i>f<sup>2</sup></i> = " + (effectSizes.cohensF * effectSizes.cohensF).toFixed(3) + ", expected <i>R<sup>2</sup></i> = " + rSquared.toFixed(3) + ".</small>";
 			}
-			
-			if (hasNominalFactors()) {
-				$("#effectSizeLabel").html(
-					"Global contrast Cohen's <i>d</i> = " + cohensD + " <i>(" + interpretCohensd(cohensD) + ")</i>; representative factorial effect: Cohen's <i>f</i> = " + cohensF + " <i>(" + interpretCohensf(cohensF) + ")</i>, <i>&eta;<sub>p</sub><sup>2</sup></i> = " + partialEtaSq + " <i>(" + interpretPartialEtaSquared(partialEtaSq) + ")</i>"
-				);
-			} else {
-				$("#effectSizeLabel").html("Cohen's <i>d</i> = " + cohensD + " <i>(" + interpretCohensd(cohensD) + ")</i>, Cohen's <i>f</i> = " + cohensF + " <i>(" + interpretCohensf(cohensF) + ")</i>, <i>&eta;<sub>p</sub><sup>2</sup></i> = " + partialEtaSq + " <i>(" + interpretPartialEtaSquared(partialEtaSq) + ")</i>");
-			}
+
+			$("#effectSizeLabel").html(text);
 		}
 		
 		function setPowerAnalysesAndEffectSizes() {
@@ -497,6 +670,7 @@ let debug = false; // Flag for enabling debug mode
 
 			lastAnovaPowerResult = null;
 			lastRegressionPowerResult = null;
+			lastTTestPowerResult = null;
 			serverRequestRunning = true;
 
 			let steps = Math.max(1, studyDesign.allConditions.length);
@@ -519,23 +693,13 @@ let debug = false; // Flag for enabling debug mode
 
 			if(hasNominalFactors()) {
 				remainingJobs++;
-				renderAnovaPowerEstimate(
-					parseFloat($("#meanDeltaInputId").val()),
-					getCurrentPooledSd(),
-					studyDesign.allConditions.length,
-					parseInt(sampleSize, 10),
-					(studyDesign.betweenConditions.length > 0 ? studyDesign.betweenConditions.length : 1),
-					(studyDesign.withinConditions.length > 0 ? studyDesign.withinConditions.length : 1),
-					finishPowerUpdate
-				);
+				renderNominalPowerEstimate(parseInt(sampleSize, 10), finishPowerUpdate);
 			}
 
 			if(hasRegressionPredictors()) { 
 				remainingJobs++;
 				renderRegressionPowerEstimate(
 					studyDesign.nonOrdinalIVs.length, 
-					parseFloat($("#meanDeltaInputId").val()),
-					getCurrentPooledSd(),
 					parseInt(sampleSize, 10),
 					finishPowerUpdate
 				);
@@ -549,67 +713,142 @@ let debug = false; // Flag for enabling debug mode
 
 		}
 			
+		function getDesignAlignmentMultiple() {
+			let betweenCells = Math.max(1, studyDesign.betweenConditions && studyDesign.betweenConditions.length ? studyDesign.betweenConditions.length : 1);
+			let withinBlock = 1;
+
+			if(studyDesign.withinConditions && studyDesign.withinConditions.length > 0) {
+				if(studyDesign.withinConditions.length <= 3) {
+					withinBlock = permutations(studyDesign.withinConditions).length;
+				} else if(studyDesign.withinConditions.length <= 12) {
+					withinBlock = studyDesign.withinConditions.length;
+				}
+			}
+
+			return Math.max(1, betweenCells * withinBlock);
+		}
+
+		function renderNominalPowerEstimate(participants, callback) {
+			let effectSizes = resolveEffectSizes();
+			let nominalFactors = getNominalFactors();
+
+			window.setTimeout(function() {
+				try {
+					if(isTTestScenario()) {
+						lastTTestPowerResult = StudyPowerEngine.estimateTTestModel({
+							paired: studyDesign.withinIVs.length > 0,
+							cohenD: effectSizes.cohensD,
+							alpha: 0.05,
+							targetPower: getTargetPower(),
+							withinCorrelation: getCurrentWithinCorrelation()
+						});
+						lastTTestPowerResult.selectedN = participants;
+						lastTTestPowerResult.selectedResult = computeTTestPowerAtSampleSize(participants, effectSizes.cohensD, studyDesign.withinIVs.length > 0, getCurrentWithinCorrelation());
+						showTTestPowerAndEffectSizes(lastTTestPowerResult, participants);
+					} else {
+						lastAnovaPowerResult = StudyPowerEngine.estimateAnovaModel({
+							factors: nominalFactors,
+							effectSizeF: effectSizes.cohensF,
+							alpha: 0.05,
+							targetPower: getTargetPower(),
+							withinCorrelation: getCurrentWithinCorrelation()
+						});
+						showANOVAPowerAndEffectSizes(lastAnovaPowerResult, participants);
+					}
+
+					$("#cellSampleSize").show();
+				} catch (error) {
+					console.error(error);
+					$("#rowWAIT").text("Power estimation failed. Please check the browser console.");
+					$("#sampleSizePleaseWait").hide();
+				} finally {
+					if(typeof callback === "function") {
+						callback();
+					}
+				}
+			}, 0);
+		}
 
 		function estimateInitialSampleSizeLocally() { 
 
-			let delta = parseFloat($("#meanDeltaInputId").val());
-			let SD = getCurrentPooledSd();
+			let effectSizes = resolveEffectSizes();
 
 			if(!serverRequestRunning) { 
 				if(!manualSampleSizeUpdate) { 
 					serverRequestRunning = true; 
 
 					window.setTimeout(function() {
-						let estimates = [];
+						try {
+							let estimates = [];
 
-						if(hasNominalFactors()) {
-							let anovaSampleSize = StudyPowerEngine.estimateSampleSizeForAnova({
-								factors: getNominalFactors(),
-								delta: delta,
-								sd: SD,
-								alpha: 0.05,
-								targetPower: 0.80,
-								withinCorrelation: getCurrentWithinCorrelation(),
-								simulations: simulations,
-								seed: 1234
-							});
+							if(hasNominalFactors()) {
+								if(isTTestScenario()) {
+									let tTestSampleSize = StudyPowerEngine.estimateTTestModel({
+										paired: studyDesign.withinIVs.length > 0,
+										cohenD: effectSizes.cohensD,
+										alpha: 0.05,
+										targetPower: getTargetPower(),
+										withinCorrelation: getCurrentWithinCorrelation(),
+										includeCurvePoints: false
+									});
+									studyDesign.minimumSampleSize = tTestSampleSize.minimumN;
+									estimates.push(tTestSampleSize.minimumN);
+								} else {
+									let anovaSampleSize = StudyPowerEngine.estimateSampleSizeForAnova({
+										factors: getNominalFactors(),
+										effectSizeF: effectSizes.cohensF,
+										alpha: 0.05,
+										targetPower: getTargetPower(),
+										withinCorrelation: getCurrentWithinCorrelation(),
+										includeCurvePoints: false
+									});
+									studyDesign.minimumSampleSize = anovaSampleSize.minimumN;
+									estimates.push(anovaSampleSize.minimumN);
+								}
+							}
 
-							estimates.push(anovaSampleSize.sampleSize);
+							if(hasRegressionPredictors()) {
+								let regressionSampleSize = StudyPowerEngine.estimateSampleSizeForRegression({
+									predictors: studyDesign.nonOrdinalIVs.length,
+									effectSizeFSquared: effectSizes.cohensF * effectSizes.cohensF,
+									alpha: 0.05,
+									targetPower: getTargetPower(),
+									includeCurvePoints: false
+								});
+								studyDesign.regressionMinimumSampleSize = regressionSampleSize.minimumN;
+								estimates.push(regressionSampleSize.minimumN);
+							}
+
+							let minimumEstimate = estimates.length > 0 ? Math.max.apply(null, estimates) : 0;
+							let requiredSampleSize = roundUpToNextDivisible(minimumEstimate, getDesignAlignmentMultiple());
+							studyDesign.minimumSampleSize = minimumEstimate;
+							studyDesign.requiredSampleSize = requiredSampleSize;
+							sampleSize = requiredSampleSize;
+
+							let steps = Math.max(1, studyDesign.allConditions.length);
+							let sliderMax = Math.max(200, parseInt(sampleSize, 10) + (steps * 4));
+							studyDesign.samples = setSlider("#samplesInputId", "#samplesOutputId", sampleSize, 0, sliderMax, steps);  
+							markSampleSizeReady();
+							 
+							$("#sampleSizePleaseWait").hide(); 
+							$("#sampleSizeSlider").show(); 
+
+							if(studyDesign.DVs.length > 1 && studyDesign.IVs.length > 0 ){
+								$("#cellMANOVA").show();
+							} else {
+								$("#cellMANOVA").hide();
+								$("input[name='manovaCheckBox']").prop("checked", false);
+							}
+
+							setPowerAnalysesAndEffectSizes();
+						} catch (error) {
+							console.error(error);
+							$("#rowWAIT").text("Sample-size estimation failed. Please check the browser console.");
+							$("#sampleSizePleaseWait").hide();
+							$("#sampleSizeSlider").hide();
+						} finally {
+							serverRequestRunning = false;
 						}
-
-						if(hasRegressionPredictors()) {
-							let regressionSampleSize = StudyPowerEngine.estimateSampleSizeForRegression({
-								predictors: studyDesign.nonOrdinalIVs.length,
-								delta: delta,
-								sd: SD,
-								alpha: 0.05,
-								targetPower: 0.80,
-								simulations: simulations,
-								seed: 5678
-							});
-
-							estimates.push(regressionSampleSize.sampleSize);
-						}
-
-						sampleSize = estimates.length > 0 ? Math.max.apply(null, estimates) : 0;
-
-						let steps = Math.max(1, studyDesign.allConditions.length);
-						let sliderMax = Math.max(200, parseInt(sampleSize, 10) + (steps * 4));
-						studyDesign.samples = setSlider("#samplesInputId", "#samplesOutputId", sampleSize, 0, sliderMax, steps);  
-						markSampleSizeReady();
-						 
-						$("#sampleSizePleaseWait").hide(); 
-						$("#sampleSizeSlider").show(); 
-
-						if(studyDesign.DVs.length > 1 && studyDesign.IVs.length > 0 ){
-							$("#cellMANOVA").show();
-						} else {
-							$("#cellMANOVA").hide();
-							$("input[name='manovaCheckBox']").prop("checked", false);
-						}
-
-						serverRequestRunning = false;
-						setPowerAnalysesAndEffectSizes();
 					}, 0);
 				} else { 
 					sampleSize = $("#samplesInputId").val();  
@@ -621,26 +860,43 @@ let debug = false; // Flag for enabling debug mode
 			
 		}
 		
-		function renderRegressionPowerEstimate(IVs, delta, sd, participants, callback) {    
+		function renderRegressionPowerEstimate(IVs, participants, callback) {    
 			if(!serverRegressionRequestRunning) {
 				serverRegressionRequestRunning = true;
 
 				window.setTimeout(function() {
-					lastRegressionPowerResult = StudyPowerEngine.estimateRegressionPower({
-						predictors: parseInt(IVs, 10),
-						participants: parseInt(participants, 10),
-						delta: delta,
-						sd: sd,
-						alpha: 0.05,
-						simulations: simulations,
-						seed: 2468
-					});
+					try {
+						let effectSizes = resolveEffectSizes();
+						let regressionSampleSizeResult = StudyPowerEngine.estimateSampleSizeForRegression({
+							predictors: parseInt(IVs, 10),
+							effectSizeFSquared: effectSizes.cohensF * effectSizes.cohensF,
+							alpha: 0.05,
+							targetPower: getTargetPower(),
+							includeCurvePoints: true
+						});
+						let regressionPowerResult = StudyPowerEngine.estimateRegressionPower({
+							predictors: parseInt(IVs, 10),
+							participants: parseInt(participants, 10),
+							effectSizeFSquared: effectSizes.cohensF * effectSizes.cohensF,
+							alpha: 0.05,
+						});
 
-					showRegressionPowerAndEffectSizes(lastRegressionPowerResult);
-					serverRegressionRequestRunning = false;
+						lastRegressionPowerResult = Object.assign({}, regressionPowerResult, {
+							minimumN: studyDesign.regressionMinimumSampleSize || regressionSampleSizeResult.minimumN || participants,
+							curvePoints: regressionSampleSizeResult.curvePoints || [],
+							effectRow: regressionSampleSizeResult.effectRow || null
+						});
+						showRegressionPowerAndEffectSizes(lastRegressionPowerResult, participants);
+					} catch (error) {
+						console.error(error);
+						$("#rowWAIT").text("Regression power estimation failed. Please check the browser console.");
+						$("#sampleSizePleaseWait").hide();
+					} finally {
+						serverRegressionRequestRunning = false;
 
-					if(typeof callback === "function") {
-						callback();
+						if(typeof callback === "function") {
+							callback();
+						}
 					}
 				}, 0);
 			} 
@@ -648,6 +904,7 @@ let debug = false; // Flag for enabling debug mode
 		
 		function clearOutputAndWait() {
 			resetSampleSizeProgress();
+			destroyPowerChart();
 
 			if(studyDesign.IVs.length > 0 && studyDesign.DVs.length > 0) {
 				$("#rowWAIT").text("Please wait..."); 
@@ -669,6 +926,9 @@ let debug = false; // Flag for enabling debug mode
 				$("#cellEquivalence").hide();
 				$("#cellSampleSize").hide();
 				$("#cellVariance").hide(); 
+				$("#cellEffectMode").hide();
+				$("#cellTargetPower").hide();
+				$("#cellWithinCorrelation").hide();
 				$("#cellDeltaMeans").hide();
 			}
 		}
@@ -1010,6 +1270,11 @@ let debug = false; // Flag for enabling debug mode
 			if(!manualSampleSizeUpdate) $(label).val(val);  
 			return $(slider).val();
 		}
+
+		function roundTo(value, digits) {
+			let factor = Math.pow(10, digits);
+			return Math.round(value * factor) / factor;
+		}
 		
 		const calculateMean = (values) => {
 			const mean = (values.reduce((sum, current) => sum + current)) / values.length;
@@ -1040,12 +1305,12 @@ let debug = false; // Flag for enabling debug mode
 		
 		function getCohensF(delta, sd) {   
 			let d = getCohensD(delta, sd);
-			return d / 2; 
+			return StudyPowerEngine.dToF(d); 
 		} 
 		
 		function getPartialEtaSquared(delta, sd) { 
 			let d = getCohensD(delta, sd); 
-			return (d * d) / ((d * d) + 2);
+			return StudyPowerEngine.dToPartialEtaSquared(d);
 		}
 		
 		function roundUpToNextDivisible(value, divisor) {
@@ -1175,82 +1440,73 @@ let debug = false; // Flag for enabling debug mode
 		}
  
 		function example2x3Within(){  
-			resetStudyDesign();  
-			$('[id*=buttonDV_]').each(function(i) { $(this).click(); });
-			$('[id*=buttonIV_]').each(function(i) { $(this).click(); });
-			serverANOVARequestRunning = true; 
-			$("input[name='nameIV']").val("Prototype");
-			$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
-			$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
-			$("input[name='enterLevelsIV']").val("Prototype A, Prototype B");
-			$("#addIV").click();
-			$("input[name='nameIV']").val("Scenario");
-			$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
-			$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
-			$("input[name='enterLevelsIV']").val("Scenario A, Scenario B, Scenario C");
-			$("#addIV").click(); 			
-			$("input[name='nameDV']").val("Presence");	
-			$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
-			$("#addDV").click();
-			$("input[name='nameDV']").val("Throughput");
-			$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
-			$("#addDV").click();
-			$("input[name='nameDV']").val("Clicks");
-			$("select[name='selectDVType'] option:eq(2)").prop("selected", true);
-			$("#addDV").click();
-			serverANOVARequestRunning = false;
-			$("input[name='nameDV']").val("Distance");
-			$("select[name='selectDVType'] option:eq(3)").prop("selected", true);
-			$("#addDV").click();
+			runExampleSetup(function() {
+				$("input[name='nameIV']").val("Prototype");
+				$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
+				$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
+				$("input[name='enterLevelsIV']").val("Prototype A, Prototype B");
+				$("#addIV").click();
+				$("input[name='nameIV']").val("Scenario");
+				$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
+				$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
+				$("input[name='enterLevelsIV']").val("Scenario A, Scenario B, Scenario C");
+				$("#addIV").click();
+				$("input[name='nameDV']").val("Presence");
+				$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
+				$("#addDV").click();
+				$("input[name='nameDV']").val("Throughput");
+				$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
+				$("#addDV").click();
+				$("input[name='nameDV']").val("Clicks");
+				$("select[name='selectDVType'] option:eq(2)").prop("selected", true);
+				$("#addDV").click();
+				$("input[name='nameDV']").val("Distance");
+				$("select[name='selectDVType'] option:eq(3)").prop("selected", true);
+				$("#addDV").click();
+			});
 		}
  
 		function example2x4Mixed(){  
-			resetStudyDesign(); 
-			$('[id*=buttonDV_]').each(function(i) { $(this).click(); });
-			$('[id*=buttonIV_]').each(function(i) { $(this).click(); });
-			serverANOVARequestRunning = true;
-			$("input[name='nameIV']").val("Gender");
-			$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
-			$("select[name='selectIVwithin'] option:eq(2)").prop("selected", true);
-			$("input[name='enterLevelsIV']").val("men, women");
-			$("#addIV").click();  
-			$("input[name='nameIV']").val("Prototype");
-			$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
-			$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
-			$("input[name='enterLevelsIV']").val("Prototype A, Prototype B, Prototype C, Prototype D");
-			$("#addIV").click();			
-			$("input[name='nameDV']").val("Words per Minute");	
-			$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
-			$("#addDV").click();
-			$("input[name='nameDV']").val("Characters per Minute");
-			$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
-			$("#addDV").click();
-			serverANOVARequestRunning = false;
-			$("input[name='nameDV']").val("Correct Answers");
-			$("select[name='selectDVType'] option:eq(2)").prop("selected", true);
-			$("#addDV").click(); 
+			runExampleSetup(function() {
+				$("input[name='nameIV']").val("Gender");
+				$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
+				$("select[name='selectIVwithin'] option:eq(2)").prop("selected", true);
+				$("input[name='enterLevelsIV']").val("men, women");
+				$("#addIV").click();
+				$("input[name='nameIV']").val("Prototype");
+				$("select[name='selectIVType'] option:eq(1)").prop("selected", true);
+				$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
+				$("input[name='enterLevelsIV']").val("Prototype A, Prototype B, Prototype C, Prototype D");
+				$("#addIV").click();
+				$("input[name='nameDV']").val("Words per Minute");
+				$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
+				$("#addDV").click();
+				$("input[name='nameDV']").val("Characters per Minute");
+				$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
+				$("#addDV").click();
+				$("input[name='nameDV']").val("Correct Answers");
+				$("select[name='selectDVType'] option:eq(2)").prop("selected", true);
+				$("#addDV").click();
+			});
 		}
  
 		function exampleRegression(){  
-			resetStudyDesign();
-			$('[id*=buttonDV_]').each(function(i) { $(this).click(); });
-			$('[id*=buttonIV_]').each(function(i) { $(this).click(); });
-			serverRegressionRequestRunning = true;  
-			$("input[name='nameIV']").val("Volume");
-			$("select[name='selectIVType'] option:eq(4)").prop("selected", true);
-			$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true); 
-			$("#addIV").click();
-			$("input[name='nameIV']").val("Workload");
-			$("select[name='selectIVType'] option:eq(4)").prop("selected", true);
-			$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true); 
-			$("#addIV").click();			
-			$("input[name='nameDV']").val("Words per Minute");	
-			$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
-			$("#addDV").click();
-			serverRegressionRequestRunning = false;
-			$("input[name='nameDV']").val("Characters per Minute");
-			$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
-			$("#addDV").click(); 
+			runExampleSetup(function() {
+				$("input[name='nameIV']").val("Volume");
+				$("select[name='selectIVType'] option:eq(4)").prop("selected", true);
+				$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
+				$("#addIV").click();
+				$("input[name='nameIV']").val("Workload");
+				$("select[name='selectIVType'] option:eq(4)").prop("selected", true);
+				$("select[name='selectIVwithin'] option:eq(1)").prop("selected", true);
+				$("#addIV").click();
+				$("input[name='nameDV']").val("Words per Minute");
+				$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
+				$("#addDV").click();
+				$("input[name='nameDV']").val("Characters per Minute");
+				$("select[name='selectDVType'] option:eq(4)").prop("selected", true);
+				$("#addDV").click();
+			});
 		}
 		
 		function generate() { }
@@ -1276,15 +1532,20 @@ let debug = false; // Flag for enabling debug mode
 				if(!Array.isArray(array_of_arrays[i]) || array_of_arrays[i].length == 0 ) return []; 
 			}
   
+			let combinationLimit = array_of_arrays.reduce(function(total, values) {
+				return total * values.length;
+			}, 1);
 			let odometer = new Array( array_of_arrays.length );
 			odometer.fill(0);  
 			let output = [];
 			let newCombination = formCombination( odometer, array_of_arrays );
 			output.push( newCombination );
+			let safetyCounter = 1;
 
-			while ( odometer_increment( odometer, array_of_arrays ) ){
+			while ( odometer_increment( odometer, array_of_arrays ) && safetyCounter < combinationLimit ){
 				newCombination = formCombination( odometer, array_of_arrays );
 				output.push( newCombination );
+				safetyCounter++;
 			}
 
 			return output;
@@ -1318,78 +1579,355 @@ let debug = false; // Flag for enabling debug mode
 			}
 		}
 
-		function renderAnovaPowerEstimate(delta, sd, conditions, participants, betweens, withins, callback) {
-			if(studyDesign.allConditions.length > participants) {
-				$("#samplesOutputId").text("Need more samples...");
-
-				if(typeof callback === "function") {
-					callback();
-				}
-
-				return;
+		function destroyPowerChart() {
+			if(powerChartInstance) {
+				powerChartInstance.destroy();
+				powerChartInstance = null;
 			}
-
-			if(serverANOVARequestRunning) {
-				return;
-			}
-
-			serverANOVARequestRunning = true;
-
-			window.setTimeout(function() {
-				lastAnovaPowerResult = StudyPowerEngine.estimateAnovaPower({
-					factors: getNominalFactors(),
-					delta: delta,
-					sd: parseFloat(sd),
-					totalParticipants: parseInt(participants, 10),
-					alpha: 0.05,
-					withinCorrelation: getCurrentWithinCorrelation(),
-					simulations: simulations,
-					seed: 1357
-				});
-
-				showANOVAPowerAndEffectSizes(lastAnovaPowerResult);
-				$("#cellSampleSize").show();
-				serverANOVARequestRunning = false;
-
-				if(typeof callback === "function") {
-					callback();
-				}
-			}, 0);
 		}
 
-		function showRegressionPowerAndEffectSizes(regressionResult){
+		function dedupeAndSortCurvePoints(curvePoints) {
+			let pointMap = new Map();
+
+			(curvePoints || []).forEach(function(point) {
+				if(!point || !isFinite(point.totalParticipants)) {
+					return;
+				}
+
+				pointMap.set(Number(point.totalParticipants), point);
+			});
+
+			return Array.from(pointMap.values()).sort(function(left, right) {
+				return left.totalParticipants - right.totalParticipants;
+			});
+		}
+
+		function buildConsistentCurvePoints(curvePoints, requiredN, requiredRows) {
+			let normalizedPoints = dedupeAndSortCurvePoints(curvePoints);
+
+			if(Array.isArray(requiredRows) && requiredRows.length > 0 && isFinite(requiredN)) {
+				let hasRequiredPoint = normalizedPoints.some(function(point) {
+					return point.totalParticipants === requiredN;
+				});
+
+				if(!hasRequiredPoint) {
+					normalizedPoints.push({
+						totalParticipants: requiredN,
+						rows: requiredRows
+					});
+					normalizedPoints = dedupeAndSortCurvePoints(normalizedPoints);
+				}
+			}
+
+			return normalizedPoints;
+		}
+
+		function getChartTickStep(values) {
+			if(!values || values.length <= 1) {
+				return 1;
+			}
+
+			let minStep = null;
+
+			for(let i = 1; i < values.length; i++) {
+				let step = values[i] - values[i - 1];
+
+				if(step > 0 && (minStep === null || step < minStep)) {
+					minStep = step;
+				}
+			}
+
+			return minStep || 1;
+		}
+
+		function renderPowerChart(canvasId, curvePoints, highlightedN, requiredN, targetPower) {
+			let canvas = document.getElementById(canvasId);
+			let context = null;
+
+			if(!canvas || typeof canvas.getContext !== "function") {
+				return;
+			}
+
+			try {
+				context = canvas.getContext("2d");
+			} catch (error) {
+				console.warn("Chart rendering skipped:", error);
+				return;
+			}
+
+			if(!context) {
+				return;
+			}
+
+			let normalizedCurvePoints = dedupeAndSortCurvePoints(curvePoints);
+			let labels = normalizedCurvePoints.map(function(point) { return point.totalParticipants; });
+			let tickStepSize = getChartTickStep(labels);
+			let effectLabels = [];
+
+			$(normalizedCurvePoints).each(function(_, point) {
+				$(point.rows).each(function(__, row) {
+					if(effectLabels.indexOf(row.label) === -1) {
+						effectLabels.push(row.label);
+					}
+				});
+			});
+
+			let palette = ["#0d6efd", "#198754", "#dc3545", "#fd7e14", "#6f42c1", "#20c997"];
+			let datasets = effectLabels.map(function(label, index) {
+				return {
+					label: label,
+					data: normalizedCurvePoints.map(function(point) {
+						let match = point.rows.find(function(row) { return row.label === label; });
+						return match ? { x: point.totalParticipants, y: roundTo(match.power * 100, 1) } : null;
+					}),
+					borderColor: palette[index % palette.length],
+					backgroundColor: palette[index % palette.length],
+					tension: 0.25,
+					fill: false,
+					pointRadius: 2,
+					pointHoverRadius: 4
+				};
+			});
+
+			datasets.push({
+				label: "Target power",
+				data: labels.map(function(value) {
+					return { x: value, y: roundTo(targetPower * 100, 1) };
+				}),
+				borderColor: "#111827",
+				borderDash: [6, 4],
+				pointRadius: 0,
+				tension: 0,
+				fill: false
+			});
+
+			datasets.push({
+				label: "Minimum N",
+				data: labels.map(function(value) {
+					return value === highlightedN ? { x: value, y: roundTo(targetPower * 100, 1) } : null;
+				}),
+				borderColor: "#111827",
+				backgroundColor: "#111827",
+				showLine: false,
+				pointRadius: 6,
+				pointHoverRadius: 7
+			});
+
+			datasets.push({
+				label: "Required N",
+				data: labels.map(function(value) {
+					return value === requiredN ? { x: value, y: roundTo(targetPower * 100, 1) } : null;
+				}),
+				borderColor: "#c2410c",
+				backgroundColor: "#c2410c",
+				showLine: false,
+				pointStyle: "rectRot",
+				pointRadius: 6,
+				pointHoverRadius: 7
+			});
+
+			destroyPowerChart();
+			powerChartInstance = new Chart(context, {
+				type: "line",
+				data: {
+					datasets: datasets
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					interaction: {
+						mode: "nearest",
+						intersect: false
+					},
+					scales: {
+						y: {
+							min: 0,
+							max: 100,
+							title: {
+								display: true,
+								text: "Power (%)"
+							}
+						},
+						x: {
+							type: "linear",
+							title: {
+								display: true,
+								text: "Total participants"
+							},
+							ticks: {
+								stepSize: tickStepSize,
+								precision: 0
+							}
+						}
+					}
+				}
+			});
+		}
+
+		function buildAnovaPowerFormula(effectRow, selectedParticipants) {
+			let lambdaWeight = effectRow.cohenF > 0 ? effectRow.lambda / (selectedParticipants * effectRow.cohenF * effectRow.cohenF) : 0;
+			return "<code>Power = 1 - F<sub>ncf</sub>(F<sub>crit</sub>; df1 = " + effectRow.df1 + ", df2 = " + effectRow.df2 + ", &lambda; = " + roundTo(effectRow.lambda, 3) + ")</code><br /><code>&lambda; = N &times; f<sup>2</sup> &times; w = " + selectedParticipants + " &times; " + roundTo(effectRow.cohenF * effectRow.cohenF, 3) + " &times; " + roundTo(lambdaWeight, 3) + "</code>";
+		}
+
+		function buildRegressionFormula(regressionResult, selectedParticipants) {
+			let fSquaredRow = regressionResult.tableRows.find(function(row) { return row.label === "Effect size (f^2)"; });
+			let fSquared = fSquaredRow ? parseFloat(fSquaredRow.value) : 0;
+			return "<code>Power = 1 - F<sub>ncf</sub>(F<sub>crit</sub>; u = p, v = N - p - 1, &lambda; = N &times; f<sup>2</sup>)</code><br /><code>&lambda; = " + selectedParticipants + " &times; " + roundTo(fSquared, 3) + " = " + roundTo(selectedParticipants * fSquared, 3) + "</code>";
+		}
+
+		function buildPowerSummary(minimumN, requiredN, controllingLabel) {
+			return "<p><strong>Minimum N:</strong> " + minimumN + " participants to reach the selected target power.</p><p><strong>Required N:</strong> " + requiredN + " participants after rounding to the current design sequence multiple.</p><p><strong>Controlling effect:</strong> " + controllingLabel + "</p>";
+		}
+
+		function getNominalRCode() {
+			if(isTTestScenario()) {
+				if(studyDesign.withinIVs.length > 0) {
+					return "library(rstatix)<br />t_test(data = data, " + studyDesign.DVs[0].name + " ~ " + studyDesign.IVs[0].name + ", paired = TRUE)<br />cohens_d(data = data, " + studyDesign.DVs[0].name + " ~ " + studyDesign.IVs[0].name + ", paired = TRUE)";
+				}
+
+				return "library(rstatix)<br />t_test(data = data, " + studyDesign.DVs[0].name + " ~ " + studyDesign.IVs[0].name + ", paired = FALSE)<br />cohens_d(data = data, " + studyDesign.DVs[0].name + " ~ " + studyDesign.IVs[0].name + ", paired = FALSE)";
+			}
+
+			if(studyDesign.withinIVs.length >= 1 && studyDesign.betweenIVs.length >= 1) {
+				return "library(rstatix)<br />aov <- anova_test(data = data, dv = " + studyDesign.DVs[0].name + ", wid = SubjectID, between = c(" + getNamesFromArray(studyDesign.betweenIVs, ", ", "name").slice(0, -2) + "), within = c(" + getNamesFromArray(studyDesign.withinIVs, ", ", "name").slice(0, -2) + "), effect.size = \"pes\")<br />get_anova_table(aov, correction = \"auto\")";
+			}
+
+			if(studyDesign.withinIVs.length >= 1) {
+				return "library(rstatix)<br />aov <- anova_test(data = data, dv = " + studyDesign.DVs[0].name + ", wid = SubjectID, within = c(" + getNamesFromArray(studyDesign.withinIVs, ", ", "name").slice(0, -2) + "), effect.size = \"pes\")<br />get_anova_table(aov, correction = \"auto\")";
+			}
+
+			return "library(rstatix)<br />aov <- anova_test(data = data, dv = " + studyDesign.DVs[0].name + ", between = c(" + getNamesFromArray(studyDesign.betweenIVs, ", ", "name").slice(0, -2) + "), effect.size = \"pes\")<br />get_anova_table(aov)";
+		}
+
+		function getRegressionRCode() {
+			return "lm_model <- lm(" + studyDesign.DVs[0].name + " ~ " + getNamesFromArray(studyDesign.nonOrdinalIVs, " + ", "name").slice(0, -3) + ", data = data)<br />summary(lm_model)";
+		}
+
+		function appendPowerTabs(containerId, uniqueId, overviewHtml, formulaHtml, rCodeHtml) {
+			let tabsHtml = '<ul class="nav nav-pills mb-3 mt-3" id="power-tabs-' + uniqueId + '" role="tablist">' +
+				'<li class="nav-item" role="presentation"><button class="nav-link active" id="overview-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#overview-' + uniqueId + '" type="button" role="tab">Overview</button></li>' +
+				'<li class="nav-item" role="presentation"><button class="nav-link" id="formula-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#formula-' + uniqueId + '" type="button" role="tab">Formula</button></li>' +
+				'<li class="nav-item" role="presentation"><button class="nav-link" id="rcode-tab-' + uniqueId + '" data-bs-toggle="pill" data-bs-target="#rcode-' + uniqueId + '" type="button" role="tab">R code</button></li>' +
+				'</ul>' +
+				'<div class="tab-content">' +
+				'<div class="tab-pane fade show active" id="overview-' + uniqueId + '" role="tabpanel">' + overviewHtml + '</div>' +
+				'<div class="tab-pane fade" id="formula-' + uniqueId + '" role="tabpanel">' + formulaHtml + '</div>' +
+				'<div class="tab-pane fade" id="rcode-' + uniqueId + '" role="tabpanel"><code>' + rCodeHtml + '</code></div>' +
+				'</div>';
+
+			$(containerId).append(tabsHtml);
+		}
+
+		function showRegressionPowerAndEffectSizes(regressionResult, participants){
+			$("#rowES").show();
+			let summaryHtml = buildPowerSummary(regressionResult.minimumN || participants, participants, "Overall regression model");
 			let tableBody = "";
+			let selectedRegressionPoint = {
+				label: "Overall regression model",
+				power: regressionResult.power
+			};
+			let curvePoints = buildConsistentCurvePoints(
+				(regressionResult.curvePoints || []).map(function(point) {
+					return {
+						totalParticipants: point.totalParticipants,
+						rows: [{
+							label: "Overall regression model",
+							power: point.rows[0].power
+						}]
+					};
+				}),
+				participants,
+				[selectedRegressionPoint]
+			);
 
 			$(regressionResult.tableRows).each(function(i){
 				tableBody += "<tr><td>" + regressionResult.tableRows[i].label + "</td><td>" + regressionResult.tableRows[i].value + "</td></tr>";
 			});
 
-			$("#rowES").show(); 
-			  
-			let resultStr = '<div class="accordion">'; 
-			let effectSizesText = "Number of subjects N = " + sampleSize + " estimated locally in the browser with an analytic multiple-regression F-test targeting about 80% overall model power."; 
-			let text = "The statistical power (the probability that the test correctly rejects the null hypothesis) of a regression depends on the sample size, effect size, and degrees of freedom. The planner estimates regression power locally in the browser with a noncentral F-test for the overall model, using an <i>f<sup>2</sup></i> effect size derived from the current delta and pooled SD controls via the planner's legacy <i>f = d / sqrt(2)</i> mapping.";
- 
-			resultStr += '<div class="accordion-item" id="accordionREGRESSIONES"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseREGRESSIONES" aria-controls="accordionREGRESSIONES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' Estimated Regression Power and Effect Sizes</h6></button><div id="collapseREGRESSIONES" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light" )><p>' + text + '</p><p><table id="powerRegressionOutputTable" class="table-striped table table-bordered table-hover"><thead><tr><th data-field="_row" class="th-sm"><strong >Regression parameter</strong></th><th data-field="value" class="th-sm"><strong >Value</strong></th></tr></thead><tbody>' + tableBody + '</tbody></table><br /><p>' + effectSizesText + '</p></div></div></div>';	 
-			
-			resultStr+='</div>';
-			$("#power").append(resultStr); 
+			let overviewHtml = summaryHtml +
+				'<div class="chart-shell" style="height: 320px;"><canvas id="powerChartRegression"></canvas></div>' +
+				'<div class="table-responsive mt-3"><table class="table table-striped table-bordered"><thead><tr><th>Regression parameter</th><th>Value</th></tr></thead><tbody>' + tableBody + '</tbody></table></div>';
+			let formulaHtml = "<p>" + buildRegressionFormula(regressionResult, participants) + "</p>";
+			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseREGRESSIONES" aria-controls="collapseREGRESSIONES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori regression power</h6></button><div id="collapseREGRESSIONES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="regressionPowerBody"></div></div></div></div>';
+
+			$("#power").append(resultStr);
+			appendPowerTabs("#regressionPowerBody", "regression", overviewHtml, formulaHtml, getRegressionRCode());
+			renderPowerChart("powerChartRegression", curvePoints, regressionResult.minimumN || participants, participants, getTargetPower());
 			$("#resultsPanel").show();
 		}
 
-		function showANOVAPowerAndEffectSizes(anovaResult){
+		function showTTestPowerAndEffectSizes(tTestResult, participants) {
 			$("#rowES").show();
-			  
-			let resultStr = '<div class="accordion">';
-			let effectSizesText = "Number of subjects N = " + sampleSize + " estimated locally in the browser with a Superpower-inspired balanced-design approximation targeting about 80% power for the strongest main effect."; 
-			let text = "The statistical power (the probability that the test correctly rejects the null hypothesis) depends on the sample size, the assumed cell means, and the design structure. The planner builds a linear factorial mean pattern in a fixed within-first priority order, adds a small orthogonal interaction component, derives ANOVA effect sizes analytically, and reports the expected power for each main and interaction effect separately. Between-subject effects will typically need more participants than comparable within-subject effects.";
- 
-			resultStr += '<div class="accordion-item" id="accordionANOVAES"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseANOVAES" aria-controls="accordionANOVAES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' Simulated Statistical Power, Main and Interaction Effect Sizes</h6></button><div id="collapseANOVAES" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light" )><p>' + text + '</p><table id="powerOutputTable" class="table-striped"><thead><tr><th data-field="_row" class="th-sm"><strong >Independent Variable(s)</strong></th><th data-field="power" class="th-sm"><strong >Statistical Power in %</strong></th><th data-field="partial_eta_squared" class="th-sm"><strong >Effect Size (<i>&eta;<sub>p</sub><sup>2</sup></i>)</strong></th><th data-field="cohen_f" class="th-sm"><strong>Effect Size (Cohen\'s <i>f</i>)</strong></th></tr></thead></table><br /><p>' + effectSizesText + '</p></div></div></div>';
-			resultStr += '</div>';
-			
-			$("#power").append(resultStr); 
-			$("#powerOutputTable").bootstrapTable({ data: anovaResult.rows }); 
-			$("#powerOutputTable").html($("#powerOutputTable").html().replaceAll(":", " &times; "));
+			let selectedResult = tTestResult.selectedResult || tTestResult.effectRow;
+			selectedResult.label = selectedResult.label || (studyDesign.withinIVs.length > 0 ? "Paired t-test" : "Independent t-test");
+			let requiredN = participants;
+			let summaryHtml = buildPowerSummary(tTestResult.minimumN, requiredN, studyDesign.withinIVs.length > 0 ? "Paired t-test" : "Independent t-test");
+			let curvePoints = buildConsistentCurvePoints(
+				tTestResult.curvePoints.slice(),
+				requiredN,
+				[computeTTestPowerAtSampleSize(requiredN, resolveEffectSizes().cohensD, studyDesign.withinIVs.length > 0, getCurrentWithinCorrelation())]
+			);
+
+			let tableHtml = '<div class="chart-shell" style="height: 320px;"><canvas id="powerChartTTest"></canvas></div>' +
+				'<div class="table-responsive mt-3"><table class="table table-striped table-bordered"><thead><tr><th>Statistic</th><th>Value</th></tr></thead><tbody>' +
+				'<tr><td>Power</td><td>' + roundTo(selectedResult.power * 100, 1) + '%</td></tr>' +
+				'<tr><td>Cohen\'s d</td><td>' + roundTo(selectedResult.cohenD, 3) + '</td></tr>' +
+				'<tr><td>Cohen\'s f</td><td>' + roundTo(selectedResult.cohenF, 3) + '</td></tr>' +
+				'<tr><td>Partial eta squared</td><td>' + roundTo(selectedResult.partialEtaSquared, 3) + '</td></tr>' +
+				'<tr><td>df1 / df2</td><td>' + selectedResult.df1 + ' / ' + selectedResult.df2 + '</td></tr>' +
+				'</tbody></table></div>';
+			let formulaHtml = "<p><code>Power = 1 - F<sub>ncf</sub>(F<sub>crit</sub>; df1 = 1, df2 = " + selectedResult.df2 + ", &lambda; = " + roundTo(selectedResult.lambda, 3) + ")</code></p>";
+			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTTESTES" aria-controls="collapseTTESTES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori t-test power</h6></button><div id="collapseTTESTES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="ttestPowerBody"></div></div></div></div>';
+
+			$("#power").append(resultStr);
+			appendPowerTabs("#ttestPowerBody", "ttest", summaryHtml + tableHtml, formulaHtml, getNominalRCode());
+			renderPowerChart("powerChartTTest", curvePoints, tTestResult.minimumN, requiredN, getTargetPower());
+			$("#resultsPanel").show();
+		}
+
+		function showANOVAPowerAndEffectSizes(anovaResult, participants){
+			$("#rowES").show();
+			let effectSizes = resolveEffectSizes();
+			let selectedPower = StudyPowerEngine.estimateAnovaPower({
+				factors: getNominalFactors(),
+				effectSizeF: effectSizes.cohensF,
+				alpha: 0.05,
+				totalParticipants: participants,
+				withinCorrelation: getCurrentWithinCorrelation()
+			});
+			let selectedRows = selectedPower.rows.map(function(row) {
+				return {
+					label: row._row,
+					power: row.power / 100,
+					cohenF: row.cohen_f,
+					partialEtaSquared: row.partial_eta_squared,
+					df1: row.df1,
+					df2: row.df2
+				};
+			});
+			let controllingRow = selectedRows.reduce(function(best, row) {
+				if(!best || row.power < best.power) {
+					return row;
+				}
+
+				return best;
+			}, null);
+			let requiredN = participants;
+			let curvePoints = buildConsistentCurvePoints(anovaResult.curvePoints.slice(), requiredN, selectedRows);
+
+			let overviewHtml = buildPowerSummary(anovaResult.minimumN, requiredN, controllingRow ? controllingRow.label : "N/A") +
+				'<div class="chart-shell" style="height: 340px;"><canvas id="powerChartAnova"></canvas></div>' +
+				'<div class="table-responsive mt-3"><table id="powerOutputTable" class="table table-striped table-bordered"><thead><tr><th>Effect</th><th>Power</th><th>Cohen\'s f</th><th>Partial eta squared</th><th>df1</th><th>df2</th></tr></thead><tbody>' +
+				selectedRows.map(function(row) {
+					return "<tr><td>" + row.label + "</td><td>" + roundTo(row.power * 100, 1) + "%</td><td>" + roundTo(row.cohenF, 3) + "</td><td>" + roundTo(row.partialEtaSquared, 3) + "</td><td>" + row.df1 + "</td><td>" + row.df2 + "</td></tr>";
+				}).join("") +
+				'</tbody></table></div>';
+			let formulaHtml = controllingRow ? "<p>" + buildAnovaPowerFormula(controllingRow, requiredN) + "</p>" : "<p>No ANOVA effect available.</p>";
+			let resultStr = '<div class="accordion"><div class="accordion-item"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseANOVAES" aria-controls="collapseANOVAES"><h6 class="accordion-header">' + getDataTypeIcon("H") + ' A-priori ANOVA power</h6></button><div id="collapseANOVAES" class="accordion-collapse collapse"><div class="accordion-body bg-light" id="anovaPowerBody"></div></div></div></div>';
+
+			$("#power").append(resultStr);
+			appendPowerTabs("#anovaPowerBody", "anova", overviewHtml, formulaHtml, getNominalRCode());
+			renderPowerChart("powerChartAnova", curvePoints, anovaResult.minimumN, requiredN, getTargetPower());
 			$("#resultsPanel").show();
 		}
 

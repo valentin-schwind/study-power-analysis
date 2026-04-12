@@ -5,10 +5,15 @@
     const DEFAULT_ALPHA = 0.05;
     const DEFAULT_TARGET_POWER = 0.8;
     const DEFAULT_WITHIN_CORRELATION = 0.5;
-    const DEFAULT_SAMPLE_SIZE_STEP = 1;
-    const DEFAULT_INTERACTION_HEURISTIC_WEIGHT = 0.15;
-    const MAX_SEARCH_PARTICIPANTS = 2000;
+    const MAX_SEARCH_PARTICIPANTS = 4000;
+    const MAX_SEARCH_ITERATIONS = 32;
+    const MAX_CURVE_POINTS = 30;
     const criticalFCache = new Map();
+    const BETWEEN_WEIGHT_COEFFICIENTS = {
+        intercept: 0.5566116,
+        linear: 0.0283437,
+        quadratic: -0.00218684,
+    };
 
     function clamp(value, min, max) {
         return Math.min(Math.max(value, min), max);
@@ -25,366 +30,92 @@
         }, 1);
     }
 
-    function sum(values) {
-        return values.reduce(function (total, value) {
-            return total + value;
-        }, 0);
-    }
+    function powerSet(items) {
+        const subsets = [];
+        const totalMasks = Math.pow(2, items.length);
 
-    function average(values) {
-        return values.length === 0 ? 0 : sum(values) / values.length;
-    }
+        for (let mask = 1; mask < totalMasks; mask++) {
+            const subset = [];
 
-    function buildIdentityMatrix(size) {
-        const matrix = [];
-
-        for (let row = 0; row < size; row++) {
-            const currentRow = [];
-
-            for (let column = 0; column < size; column++) {
-                currentRow.push(row === column ? 1 : 0);
-            }
-
-            matrix.push(currentRow);
-        }
-
-        return matrix;
-    }
-
-    function buildAveragingMatrix(size) {
-        const value = 1 / size;
-        const matrix = [];
-
-        for (let row = 0; row < size; row++) {
-            const currentRow = [];
-
-            for (let column = 0; column < size; column++) {
-                currentRow.push(value);
-            }
-
-            matrix.push(currentRow);
-        }
-
-        return matrix;
-    }
-
-    function subtractMatrices(left, right) {
-        return left.map(function (row, rowIndex) {
-            return row.map(function (value, columnIndex) {
-                return value - right[rowIndex][columnIndex];
-            });
-        });
-    }
-
-    function kroneckerProduct(left, right) {
-        const matrix = [];
-
-        for (let leftRow = 0; leftRow < left.length; leftRow++) {
-            for (let rightRow = 0; rightRow < right.length; rightRow++) {
-                const currentRow = [];
-
-                for (let leftColumn = 0; leftColumn < left[leftRow].length; leftColumn++) {
-                    for (let rightColumn = 0; rightColumn < right[rightRow].length; rightColumn++) {
-                        currentRow.push(left[leftRow][leftColumn] * right[rightRow][rightColumn]);
-                    }
-                }
-
-                matrix.push(currentRow);
-            }
-        }
-
-        return matrix;
-    }
-
-    function multiplyMatrixVector(matrix, vector) {
-        return matrix.map(function (row) {
-            let total = 0;
-
-            for (let index = 0; index < row.length; index++) {
-                total += row[index] * vector[index];
-            }
-
-            return total;
-        });
-    }
-
-    function enumerateLevelCombinations(levelCounts) {
-        if (levelCounts.length === 0) {
-            return [[]];
-        }
-
-        const combinations = [];
-
-        function step(depth, current) {
-            if (depth === levelCounts.length) {
-                combinations.push(current.slice());
-                return;
-            }
-
-            for (let level = 0; level < levelCounts[depth]; level++) {
-                current.push(level);
-                step(depth + 1, current);
-                current.pop();
-            }
-        }
-
-        step(0, []);
-
-        return combinations;
-    }
-
-    function createSeededRandom(seed) {
-        if (typeof Math.seedrandom === "function") {
-            const generator = new Math.seedrandom(String(seed));
-
-            return function () {
-                return generator();
-            };
-        }
-
-        let state = 0;
-        const seedText = String(seed || 0);
-
-        for (let index = 0; index < seedText.length; index++) {
-            state = ((state << 5) - state + seedText.charCodeAt(index)) >>> 0;
-        }
-
-        if (state === 0) {
-            state = 0x6d2b79f5;
-        }
-
-        return function () {
-            state ^= state << 13;
-            state ^= state >>> 17;
-            state ^= state << 5;
-            return (state >>> 0) / 4294967296;
-        };
-    }
-
-    function randomNormal(randomSource, mean, standardDeviation) {
-        let u1 = 0;
-        let u2 = 0;
-
-        while (u1 <= Number.EPSILON) {
-            u1 = randomSource();
-        }
-
-        while (u2 <= Number.EPSILON) {
-            u2 = randomSource();
-        }
-
-        const magnitude = Math.sqrt(-2 * Math.log(u1));
-        const zValue = magnitude * Math.cos(2 * Math.PI * u2);
-
-        return mean + standardDeviation * zValue;
-    }
-
-    function shuffleValues(values, seed) {
-        const shuffled = values.slice();
-        const randomSource = createSeededRandom(seed);
-
-        for (let index = shuffled.length - 1; index > 0; index--) {
-            const swapIndex = Math.floor(randomSource() * (index + 1));
-            const temp = shuffled[index];
-            shuffled[index] = shuffled[swapIndex];
-            shuffled[swapIndex] = temp;
-        }
-
-        return shuffled;
-    }
-
-    function powerSet(factors) {
-        const effects = [];
-        const total = Math.pow(2, factors.length);
-
-        for (let mask = 1; mask < total; mask++) {
-            const current = [];
-
-            for (let index = 0; index < factors.length; index++) {
+            for (let index = 0; index < items.length; index++) {
                 if ((mask & (1 << index)) !== 0) {
-                    current.push(index);
+                    subset.push(items[index]);
                 }
             }
 
-            effects.push(current);
+            subsets.push(subset);
         }
 
-        return effects;
+        return subsets;
     }
 
-    function buildCanonicalLevelProfile(levelCount) {
-        if (levelCount <= 1) {
-            return [0];
-        }
-
-        if (levelCount === 2) {
-            return [-0.5, 0.5];
-        }
-
-        if (levelCount === 3) {
-            return [-0.5, 0, 0.5];
-        }
-
-        if (levelCount === 4) {
-            return [-0.5, -1 / 6, 1 / 6, 0.5];
-        }
-
-        const profile = [];
-
-        for (let index = 0; index < levelCount; index++) {
-            profile.push(index / (levelCount - 1) - 0.5);
-        }
-
-        return profile;
-    }
-
-    function getFactorPriority(factor, index) {
-        return {
-            index: index,
-            factor: factor,
-            typePriority: factor.type === "w" ? 0 : 1,
-            levelPriority: -factor.levels.length,
-        };
-    }
-
-    function buildPrioritizedCellOrder(factors) {
-        const prioritizedFactors = factors
-            .map(function (factor, index) {
-                return getFactorPriority(factor, index);
+    function normalizeFactors(rawFactors) {
+        return (rawFactors || [])
+            .map(function (factor) {
+                return {
+                    name: factor.name || "Factor",
+                    levels: Array.isArray(factor.levels) ? factor.levels.slice() : [],
+                    type: factor.type === "w" ? "w" : "b",
+                };
             })
-            .sort(function (left, right) {
-                if (left.typePriority !== right.typePriority) {
-                    return left.typePriority - right.typePriority;
-                }
-
-                if (left.levelPriority !== right.levelPriority) {
-                    return left.levelPriority - right.levelPriority;
-                }
-
-                return left.index - right.index;
+            .filter(function (factor) {
+                return factor.levels.length >= 2;
             });
-        const orderedCombinations = enumerateLevelCombinations(
-            prioritizedFactors.map(function (entry) {
-                return entry.factor.levels.length;
-            }),
-        );
-        const getCellIndex = createCellIndexLookup(factors);
+    }
 
-        return orderedCombinations.map(function (orderedCombination) {
-            const originalCombination = new Array(factors.length);
+    function parseStudyDesign(studyDesignString, labels) {
+        const designTokens = String(studyDesignString || "")
+            .split("*")
+            .map(function (token) {
+                return token.trim();
+            })
+            .filter(Boolean);
+        const parsedFactors = [];
+        let labelIndex = 0;
 
-            for (let factorIndex = 0; factorIndex < prioritizedFactors.length; factorIndex++) {
-                originalCombination[prioritizedFactors[factorIndex].index] = orderedCombination[factorIndex];
+        for (let tokenIndex = 0; tokenIndex < designTokens.length; tokenIndex++) {
+            const match = designTokens[tokenIndex].match(/^(\d+)([bw])$/i);
+
+            if (!match) {
+                continue;
             }
 
-            return getCellIndex(originalCombination);
-        });
-    }
+            const levelCount = parseInt(match[1], 10);
+            const factorLabel = labels && labels[labelIndex] ? labels[labelIndex] : "Factor " + (tokenIndex + 1);
+            labelIndex++;
+            const levelLabels = [];
 
-    function buildLinearMeanPattern(factors, delta) {
-        const totalCells = getTotalCellCount(factors);
-
-        if (totalCells <= 1) {
-            return [0];
-        }
-
-        const centeredMeans = new Array(totalCells).fill(0);
-        const prioritizedCellOrder = buildPrioritizedCellOrder(factors);
-
-        for (let rank = 0; rank < prioritizedCellOrder.length; rank++) {
-            centeredMeans[prioritizedCellOrder[rank]] = (rank / (totalCells - 1) - 0.5) * delta;
-        }
-
-        return centeredMeans;
-    }
-
-    function buildInteractionPattern(factors, levelProfiles, delta) {
-        if (factors.length < 2 || delta <= Number.EPSILON) {
-            return new Array(getTotalCellCount(factors)).fill(0);
-        }
-
-        const levelCombinations = enumerateLevelCombinations(
-            factors.map(function (factor) {
-                return factor.levels.length;
-            }),
-        );
-        const interactionDefinitions = powerSet(factors).filter(function (effectDefinition) {
-            return effectDefinition.length >= 2;
-        });
-        const rawPattern = levelCombinations.map(function (levelCombination) {
-            let value = 0;
-
-            for (let effectIndex = 0; effectIndex < interactionDefinitions.length; effectIndex++) {
-                const includedFactors = interactionDefinitions[effectIndex];
-                let component = 1 / Math.pow(2, includedFactors.length - 1);
-
-                for (let factorIndex = 0; factorIndex < includedFactors.length; factorIndex++) {
-                    const currentFactorIndex = includedFactors[factorIndex];
-                    component *= levelProfiles[currentFactorIndex][levelCombination[currentFactorIndex]];
-                }
-
-                value += component;
+            for (let levelIndex = 0; levelIndex < levelCount; levelIndex++) {
+                levelLabels.push(labels && labels[labelIndex] ? labels[labelIndex] : "Level " + (levelIndex + 1));
+                labelIndex++;
             }
 
-            return value;
-        });
-        const minimum = Math.min.apply(null, rawPattern);
-        const maximum = Math.max.apply(null, rawPattern);
-        const range = Math.max(maximum - minimum, Number.EPSILON);
+            parsedFactors.push({
+                name: factorLabel,
+                levels: levelLabels,
+                type: match[2].toLowerCase(),
+            });
+        }
 
-        return rawPattern.map(function (value) {
-            return ((value - minimum) / range - 0.5) * delta * DEFAULT_INTERACTION_HEURISTIC_WEIGHT * 2;
+        return normalizeFactors(parsedFactors);
+    }
+
+    function getBetweenFactors(factors) {
+        return factors.filter(function (factor) {
+            return factor.type === "b";
         });
     }
 
-    function buildConditionMeans(factors, delta, explicitMeans) {
-        const totalCells =
-            factors.length === 0
-                ? 1
-                : product(
-                      factors.map(function (factor) {
-                          return factor.levels.length;
-                      }),
-                  );
-
-        if (Array.isArray(explicitMeans) && explicitMeans.length === totalCells) {
-            return explicitMeans.slice();
-        }
-
-        if (totalCells <= 1) {
-            return [0];
-        }
-
-        const safeDelta = Math.max(0, Number(delta) || 0);
-        const levelProfiles = factors.map(function (factor) {
-            return buildCanonicalLevelProfile(factor.levels.length);
+    function getWithinFactors(factors) {
+        return factors.filter(function (factor) {
+            return factor.type === "w";
         });
-        const basePattern = buildLinearMeanPattern(factors, safeDelta);
-        const interactionPattern = buildInteractionPattern(factors, levelProfiles, safeDelta);
-
-        return basePattern.map(function (value, index) {
-            return value + interactionPattern[index];
-        });
-    }
-
-    function getTotalCellCount(factors) {
-        if (!factors || factors.length === 0) {
-            return 1;
-        }
-
-        return product(
-            factors.map(function (factor) {
-                return factor.levels.length;
-            }),
-        );
     }
 
     function getBetweenCellCount(factors) {
-        const betweenFactors = (factors || []).filter(function (factor) {
-            return factor.type === "b";
-        });
+        const betweenFactors = getBetweenFactors(factors);
 
-        if (betweenFactors.length === 0) {
+        if (!betweenFactors.length) {
             return 1;
         }
 
@@ -395,109 +126,158 @@
         );
     }
 
-    function roundUpToMultiple(value, step) {
-        if (!isFinite(value) || value <= 0) {
-            return step;
+    function getTotalCellCount(factors) {
+        if (!factors.length) {
+            return 1;
         }
 
-        return Math.ceil(value / step) * step;
+        return product(
+            factors.map(function (factor) {
+                return factor.levels.length;
+            }),
+        );
     }
 
-    function normalizeFactors(rawFactors) {
-        return (rawFactors || [])
-            .map(function (factor) {
-                return {
-                    name: factor.name,
-                    levels: factor.levels.slice(),
-                    type: factor.type,
-                };
-            })
-            .filter(function (factor) {
-                return Array.isArray(factor.levels) && factor.levels.length >= 2;
-            });
+    function dToF(dValue) {
+        return Math.abs(Number(dValue) || 0) / 2;
     }
 
-    function parseStudyDesign(studyDesignString, labels) {
-        const designTokens = (studyDesignString || "").split("*").filter(Boolean);
-        const factors = [];
-        let labelIndex = 0;
+    function fToD(fValue) {
+        return Math.abs(Number(fValue) || 0) * 2;
+    }
 
-        for (let tokenIndex = 0; tokenIndex < designTokens.length; tokenIndex++) {
-            const token = designTokens[tokenIndex].trim();
-            const match = token.match(/^(\d+)([bw])$/i);
+    function fToPartialEtaSquared(fValue) {
+        const safeF = Math.abs(Number(fValue) || 0);
+        const fSquared = safeF * safeF;
+        return fSquared / (1 + fSquared);
+    }
 
-            if (!match) {
-                continue;
-            }
+    function partialEtaSquaredToF(etaValue) {
+        const safeEta = clamp(Number(etaValue) || 0, 0, 0.999999);
 
-            const levelCount = parseInt(match[1], 10);
-            const type = match[2].toLowerCase();
-            const factorName = labels && labels[labelIndex] ? labels[labelIndex] : "Factor " + (tokenIndex + 1);
-            labelIndex++;
-            const levels = [];
-
-            for (let levelIndex = 0; levelIndex < levelCount; levelIndex++) {
-                levels.push(labels && labels[labelIndex] ? labels[labelIndex] : "Level " + (levelIndex + 1));
-                labelIndex++;
-            }
-
-            factors.push({
-                name: factorName,
-                levels: levels,
-                type: type,
-            });
+        if (safeEta <= 0) {
+            return 0;
         }
 
-        return normalizeFactors(factors);
+        return Math.sqrt(safeEta / (1 - safeEta));
     }
 
-    function buildEffectDefinitions(factors) {
-        const definitions = [];
-        const effectIndices = powerSet(factors);
+    function dToPartialEtaSquared(dValue) {
+        return fToPartialEtaSquared(dToF(dValue));
+    }
 
-        for (let effectIndex = 0; effectIndex < effectIndices.length; effectIndex++) {
-            const includedFactors = effectIndices[effectIndex];
-            const matrices = [];
-            const withinIndices = [];
+    function partialEtaSquaredToD(etaValue) {
+        return fToD(partialEtaSquaredToF(etaValue));
+    }
 
-            for (let factorIndex = 0; factorIndex < factors.length; factorIndex++) {
-                const levelCount = factors[factorIndex].levels.length;
-                const averagingMatrix = buildAveragingMatrix(levelCount);
-                const centeredProjection = subtractMatrices(buildIdentityMatrix(levelCount), averagingMatrix);
-                const included = includedFactors.indexOf(factorIndex) >= 0;
+    function logGamma(value) {
+        const coefficients = [
+            676.5203681218851,
+            -1259.1392167224028,
+            771.3234287776531,
+            -176.6150291621406,
+            12.507343278686905,
+            -0.13857109526572012,
+            9.984369578019572e-6,
+            1.5056327351493116e-7,
+        ];
 
-                matrices.push(included ? centeredProjection : averagingMatrix);
-
-                if (included && factors[factorIndex].type === "w") {
-                    withinIndices.push(factorIndex);
-                }
-            }
-
-            const projection = matrices.reduce(function (current, matrix) {
-                return current === null ? matrix : kroneckerProduct(current, matrix);
-            }, null);
-            const df1 = includedFactors.reduce(function (current, factorIndex) {
-                return current * (factors[factorIndex].levels.length - 1);
-            }, 1);
-            const withinDf = withinIndices.reduce(function (current, factorIndex) {
-                return current * (factors[factorIndex].levels.length - 1);
-            }, 1);
-
-            definitions.push({
-                indices: includedFactors,
-                label: includedFactors
-                    .map(function (factorIndex) {
-                        return factors[factorIndex].name;
-                    })
-                    .join(":"),
-                projection: projection,
-                df1: df1,
-                hasWithin: withinIndices.length > 0,
-                withinDf: withinDf,
-            });
+        if (value < 0.5) {
+            return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * value)) - logGamma(1 - value);
         }
 
-        return definitions;
+        let accumulator = 0.9999999999998099;
+        const adjustedValue = value - 1;
+
+        for (let index = 0; index < coefficients.length; index++) {
+            accumulator += coefficients[index] / (adjustedValue + index + 1);
+        }
+
+        const seriesValue = adjustedValue + coefficients.length - 0.5;
+
+        return (
+            0.9189385332046727 +
+            (adjustedValue + 0.5) * Math.log(seriesValue) -
+            seriesValue +
+            Math.log(accumulator)
+        );
+    }
+
+    function betaContinuedFraction(a, b, x) {
+        const maxIterations = 200;
+        const epsilon = 3e-14;
+        const fpmin = 1e-300;
+        let qab = a + b;
+        let qap = a + 1;
+        let qam = a - 1;
+        let c = 1;
+        let d = 1 - (qab * x) / qap;
+
+        if (Math.abs(d) < fpmin) {
+            d = fpmin;
+        }
+
+        d = 1 / d;
+        let h = d;
+
+        for (let iteration = 1; iteration <= maxIterations; iteration++) {
+            let m2 = 2 * iteration;
+            let aa = (iteration * (b - iteration) * x) / ((qam + m2) * (a + m2));
+
+            d = 1 + aa * d;
+            if (Math.abs(d) < fpmin) {
+                d = fpmin;
+            }
+            c = 1 + aa / c;
+            if (Math.abs(c) < fpmin) {
+                c = fpmin;
+            }
+            d = 1 / d;
+            h *= d * c;
+
+            aa = (-(a + iteration) * (qab + iteration) * x) / ((a + m2) * (qap + m2));
+            d = 1 + aa * d;
+            if (Math.abs(d) < fpmin) {
+                d = fpmin;
+            }
+            c = 1 + aa / c;
+            if (Math.abs(c) < fpmin) {
+                c = fpmin;
+            }
+            d = 1 / d;
+            const delta = d * c;
+            h *= delta;
+
+            if (Math.abs(delta - 1) < epsilon) {
+                break;
+            }
+        }
+
+        return h;
+    }
+
+    function regularizedIncompleteBeta(x, a, b) {
+        if (x <= 0) {
+            return 0;
+        }
+
+        if (x >= 1) {
+            return 1;
+        }
+
+        const logBetaFactor =
+            logGamma(a + b) -
+            logGamma(a) -
+            logGamma(b) +
+            a * Math.log(x) +
+            b * Math.log(1 - x);
+        const betaFactor = Math.exp(logBetaFactor);
+
+        if (x < (a + 1) / (a + b + 2)) {
+            return (betaFactor * betaContinuedFraction(a, b, x)) / a;
+        }
+
+        return 1 - (betaFactor * betaContinuedFraction(b, a, 1 - x)) / b;
     }
 
     function fCdf(value, df1, df2) {
@@ -506,15 +286,11 @@
         }
 
         const ratio = (df1 * value) / (df1 * value + df2);
-        return stats.regularisedBeta(clamp(ratio, 0, 1), df1 / 2, df2 / 2);
-    }
-
-    function fSurvival(value, df1, df2) {
-        return 1 - fCdf(value, df1, df2);
+        return regularizedIncompleteBeta(clamp(ratio, 0, 1), df1 / 2, df2 / 2);
     }
 
     function invertFCdf(probability, df1, df2) {
-        const cacheKey = [roundTo(probability, 6), df1, df2].join("|");
+        const cacheKey = [roundTo(probability, 8), df1, df2].join("|");
 
         if (criticalFCache.has(cacheKey)) {
             return criticalFCache.get(cacheKey);
@@ -523,15 +299,14 @@
         let lower = 0;
         let upper = 1;
 
-        while (fCdf(upper, df1, df2) < probability && upper < 1e6) {
+        while (fCdf(upper, df1, df2) < probability && upper < 1e7) {
             upper *= 2;
         }
 
-        for (let iteration = 0; iteration < 60; iteration++) {
+        for (let iteration = 0; iteration < 80; iteration++) {
             const middle = (lower + upper) / 2;
-            const cdfValue = fCdf(middle, df1, df2);
 
-            if (cdfValue < probability) {
+            if (fCdf(middle, df1, df2) < probability) {
                 lower = middle;
             } else {
                 upper = middle;
@@ -543,68 +318,19 @@
         return result;
     }
 
-    function noncentralFCdf(x, df1, df2, noncentrality) {
+    function noncentralFCdf(xValue, df1, df2, noncentrality) {
         if (noncentrality <= Number.EPSILON) {
-            return fCdf(x, df1, df2);
+            return fCdf(xValue, df1, df2);
         }
 
         const lambda = noncentrality / 2;
-        let weight = Math.exp(-lambda);
-        let cumulative = 0;
-
-        for (let termIndex = 0; termIndex < 120; termIndex++) {
-            cumulative += weight * fCdf(x, df1 + 2 * termIndex, df2);
-            weight *= lambda / (termIndex + 1);
-
-            if (weight < 1e-12) {
-                break;
-            }
-        }
-
-        return clamp(cumulative, 0, 1);
-    }
-
-    function chiSquareCdf(value, df) {
-        if (!isFinite(value) || value <= 0) {
-            return 0;
-        }
-
-        return stats.regularisedGamma(df / 2, value / 2);
-    }
-
-    function invertChiSquareCdf(probability, df) {
-        let lower = 0;
-        let upper = Math.max(1, df);
-
-        while (chiSquareCdf(upper, df) < probability && upper < 1e6) {
-            upper *= 2;
-        }
-
-        for (let iteration = 0; iteration < 60; iteration++) {
-            const middle = (lower + upper) / 2;
-
-            if (chiSquareCdf(middle, df) < probability) {
-                lower = middle;
-            } else {
-                upper = middle;
-            }
-        }
-
-        return (lower + upper) / 2;
-    }
-
-    function noncentralChiSquareCdf(value, df, noncentrality) {
-        if (noncentrality <= Number.EPSILON) {
-            return chiSquareCdf(value, df);
-        }
-
-        const lambda = noncentrality / 2;
+        const ratio = clamp((df1 * xValue) / (df1 * xValue + df2), 0, 1);
         let poissonWeight = Math.exp(-lambda);
         let cumulative = 0;
 
-        for (let termIndex = 0; termIndex < 160; termIndex++) {
-            cumulative += poissonWeight * chiSquareCdf(value, df + 2 * termIndex);
-            poissonWeight *= lambda / (termIndex + 1);
+        for (let index = 0; index < 220; index++) {
+            cumulative += poissonWeight * regularizedIncompleteBeta(ratio, df1 / 2 + index, df2 / 2);
+            poissonWeight *= lambda / (index + 1);
 
             if (poissonWeight < 1e-12) {
                 break;
@@ -614,547 +340,544 @@
         return clamp(cumulative, 0, 1);
     }
 
-    function approximateFPower(df1, df2, lambda, alpha) {
-        const chiSquareThreshold = invertChiSquareCdf(1 - alpha, df1) * (df2 / Math.max(df2 - 2, 1));
-        const power = 1 - noncentralChiSquareCdf(chiSquareThreshold, df1, lambda);
+    function computeFPower(df1, df2, lambda, alpha) {
+        const criticalValue = invertFCdf(1 - alpha, df1, df2);
+        const power = 1 - noncentralFCdf(criticalValue, df1, df2, lambda);
 
         return {
-            criticalValue: chiSquareThreshold / df1,
-            power: roundTo(clamp(power, 0, 1), 3),
+            criticalValue: criticalValue,
+            power: clamp(power, 0, 1),
         };
     }
 
-    function buildLayout(factors, totalParticipants) {
-        const betweenFactors = factors.filter(function (factor) {
-            return factor.type === "b";
-        });
-        const withinFactors = factors.filter(function (factor) {
-            return factor.type === "w";
-        });
-        const betweenCells = Math.max(
-            1,
-            product(
-                betweenFactors.map(function (factor) {
-                    return factor.levels.length;
-                }),
-            ),
-        );
-        const withinCells = Math.max(
-            1,
-            product(
-                withinFactors.map(function (factor) {
-                    return factor.levels.length;
-                }),
-            ),
-        );
-        const participantsPerBetweenCell = Math.max(2, Math.ceil(totalParticipants / betweenCells));
-        const balancedParticipants = participantsPerBetweenCell * betweenCells;
-        const betweenDf = Math.max(1, balancedParticipants - betweenCells);
+    function buildEffectDefinitions(factors) {
+        return powerSet(
+            factors.map(function (factor, index) {
+                return {
+                    index: index,
+                    factor: factor,
+                };
+            }),
+        ).map(function (entries) {
+            const effectFactors = entries.map(function (entry) {
+                return entry.factor;
+            });
+            const withinFactors = effectFactors.filter(function (factor) {
+                return factor.type === "w";
+            });
+            const betweenFactors = effectFactors.filter(function (factor) {
+                return factor.type === "b";
+            });
 
-        return {
-            betweenFactors: betweenFactors,
-            withinFactors: withinFactors,
-            betweenCells: betweenCells,
-            withinCells: withinCells,
-            participantsPerBetweenCell: participantsPerBetweenCell,
-            balancedParticipants: balancedParticipants,
-            betweenDf: betweenDf,
-        };
+            return {
+                indices: entries.map(function (entry) {
+                    return entry.index;
+                }),
+                factors: effectFactors,
+                withinFactors: withinFactors,
+                betweenFactors: betweenFactors,
+                hasWithin: withinFactors.length > 0,
+                hasBetween: betweenFactors.length > 0,
+                df1: effectFactors.reduce(function (total, factor) {
+                    return total * (factor.levels.length - 1);
+                }, 1),
+                repeatedMeasureCells: withinFactors.length
+                    ? product(
+                          withinFactors.map(function (factor) {
+                              return factor.levels.length;
+                          }),
+                      )
+                    : 1,
+                label: effectFactors
+                    .map(function (factor) {
+                        return factor.name;
+                    })
+                    .join(" × "),
+            };
+        });
     }
 
-    function createCellIndexLookup(factors) {
-        const levelCounts = factors.map(function (factor) {
-            return factor.levels.length;
-        });
-        const multipliers = [];
-        let runningMultiplier = 1;
+    function getBetweenEffectWeight(betweenCells) {
+        const safeBetweenCells = Math.max(2, Number(betweenCells) || 2);
+        return Math.max(
+            0.5,
+            BETWEEN_WEIGHT_COEFFICIENTS.intercept +
+                BETWEEN_WEIGHT_COEFFICIENTS.linear * safeBetweenCells +
+                BETWEEN_WEIGHT_COEFFICIENTS.quadratic * safeBetweenCells * safeBetweenCells,
+        );
+    }
 
-        for (let index = levelCounts.length - 1; index >= 0; index--) {
-            multipliers[index] = runningMultiplier;
-            runningMultiplier *= levelCounts[index];
+    function getAnovaLambdaWeight(effect, factors, withinCorrelation) {
+        const modelHasWithin = getWithinFactors(factors).length > 0;
+        const modelHasBetween = getBetweenFactors(factors).length > 0;
+        const betweenCells = getBetweenCellCount(factors);
+
+        if (!modelHasWithin || !effect.hasWithin) {
+            return getBetweenEffectWeight(betweenCells);
         }
 
-        return function (levelIndices) {
-            let index = 0;
+        if (!modelHasBetween) {
+            return effect.repeatedMeasureCells / Math.max(1 - withinCorrelation, 0.05);
+        }
 
-            for (let factorIndex = 0; factorIndex < levelIndices.length; factorIndex++) {
-                index += levelIndices[factorIndex] * multipliers[factorIndex];
-            }
+        if (effect.hasBetween) {
+            return effect.repeatedMeasureCells / Math.max(1 - withinCorrelation, 0.05);
+        }
 
-            return index;
+        return effect.repeatedMeasureCells / Math.max(1 - withinCorrelation, 0.05);
+    }
+
+    function normalizePositiveNumber(value, fallback) {
+        const normalized = Number(value);
+
+        if (!isFinite(normalized) || normalized <= 0) {
+            return fallback;
+        }
+
+        return normalized;
+    }
+
+    function normalizeRepeatedMeasuresWithinBetweenInteractionOptions(options) {
+        return {
+            effectSizeF: Math.max(0, Number(options.effectSizeF) || 0),
+            alpha: clamp(Number(options.alpha) || DEFAULT_ALPHA, 1e-9, 0.999999999),
+            targetPower: clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 1e-9, 0.999999999),
+            numberOfGroups: Math.max(2, parseInt(options.numberOfGroups, 10) || 2),
+            numberOfMeasurements: Math.max(2, parseInt(options.numberOfMeasurements, 10) || 2),
+            corrAmongRepMeasures: clamp(Number(options.corrAmongRepMeasures) || DEFAULT_WITHIN_CORRELATION, -0.999999, 0.999999),
+            epsilon: normalizePositiveNumber(options.epsilon, 1),
         };
     }
 
-    function simulateObservedMeans(options) {
-        const factors = options.factors;
-        const means = options.means;
-        const sd = options.sd;
-        const withinCorrelation = clamp(options.withinCorrelation, 0, 0.95);
-        const layout = options.layout;
-        const randomSource = options.randomSource;
-        const betweenCount = layout.betweenFactors.length;
-        const withinCount = layout.withinFactors.length;
-        const betweenCombinations = enumerateLevelCombinations(
-            layout.betweenFactors.map(function (factor) {
-                return factor.levels.length;
-            }),
-        );
-        const withinCombinations = enumerateLevelCombinations(
-            layout.withinFactors.map(function (factor) {
-                return factor.levels.length;
-            }),
-        );
-        const observedMeans = new Array(means.length).fill(0);
-        const getCellIndex = createCellIndexLookup(factors);
+    function alignTotalSampleSizeToGroups(totalSampleSize, numberOfGroups) {
+        const groups = Math.max(2, parseInt(numberOfGroups, 10) || 2);
+        const minimumSampleSize = groups * 2;
+        const requestedSampleSize = Math.max(minimumSampleSize, parseInt(totalSampleSize, 10) || minimumSampleSize);
 
-        if (withinCount === 0) {
-            const allCombinations = enumerateLevelCombinations(
-                factors.map(function (factor) {
-                    return factor.levels.length;
+        return Math.ceil(requestedSampleSize / groups) * groups;
+    }
+
+    function computeRepeatedMeasuresWithinBetweenInteractionPower(options) {
+        const normalized = normalizeRepeatedMeasuresWithinBetweenInteractionOptions(options);
+        const totalSampleSize = alignTotalSampleSizeToGroups(options.totalSampleSize, normalized.numberOfGroups);
+        const numeratorDf = (normalized.numberOfGroups - 1) * (normalized.numberOfMeasurements - 1) * normalized.epsilon;
+        const denominatorDf = (totalSampleSize - normalized.numberOfGroups) * (normalized.numberOfMeasurements - 1) * normalized.epsilon;
+        const lambda =
+            normalized.effectSizeF *
+            normalized.effectSizeF *
+            totalSampleSize *
+            ((normalized.numberOfMeasurements * normalized.epsilon) / Math.max(1 - normalized.corrAmongRepMeasures, 1e-9));
+        const criticalF = invertFCdf(1 - normalized.alpha, numeratorDf, denominatorDf);
+        const actualPower = clamp(1 - noncentralFCdf(criticalF, numeratorDf, denominatorDf, lambda), 0, 1);
+
+        return {
+            sampleSize: totalSampleSize,
+            totalSampleSize: totalSampleSize,
+            lambda: lambda,
+            criticalF: criticalF,
+            criticalValue: criticalF,
+            numeratorDf: numeratorDf,
+            denominatorDf: denominatorDf,
+            df1: numeratorDf,
+            df2: denominatorDf,
+            actualPower: actualPower,
+            power: actualPower,
+        };
+    }
+
+    function estimatePowerForRepeatedMeasuresWithinBetweenInteraction(options) {
+        return computeRepeatedMeasuresWithinBetweenInteractionPower(options);
+    }
+
+    function estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction(options) {
+        const normalized = normalizeRepeatedMeasuresWithinBetweenInteractionOptions(options);
+        let sampleSize = normalized.numberOfGroups * 2;
+        let result = computeRepeatedMeasuresWithinBetweenInteractionPower(
+            Object.assign({}, normalized, {
+                totalSampleSize: sampleSize,
+            }),
+        );
+        let iterations = 0;
+        const maxIterations = Math.ceil(MAX_SEARCH_PARTICIPANTS / normalized.numberOfGroups);
+
+        while (result.actualPower < normalized.targetPower && sampleSize < MAX_SEARCH_PARTICIPANTS && iterations < maxIterations) {
+            sampleSize += normalized.numberOfGroups;
+            result = computeRepeatedMeasuresWithinBetweenInteractionPower(
+                Object.assign({}, normalized, {
+                    totalSampleSize: sampleSize,
                 }),
             );
-
-            for (let cellIndex = 0; cellIndex < allCombinations.length; cellIndex++) {
-                let total = 0;
-
-                for (let participant = 0; participant < layout.participantsPerBetweenCell; participant++) {
-                    total += randomNormal(randomSource, means[cellIndex], sd);
-                }
-
-                observedMeans[cellIndex] = total / layout.participantsPerBetweenCell;
-            }
-
-            return observedMeans;
+            iterations++;
         }
-
-        const interceptSd = sd * Math.sqrt(withinCorrelation);
-        const residualSd = sd * Math.sqrt(Math.max(1 - withinCorrelation, 1e-6));
-
-        for (let betweenIndex = 0; betweenIndex < betweenCombinations.length; betweenIndex++) {
-            const currentBetweenLevels = betweenCombinations[betweenIndex];
-            const cellTotals = new Array(withinCombinations.length).fill(0);
-
-            for (let participant = 0; participant < layout.participantsPerBetweenCell; participant++) {
-                const subjectOffset = randomNormal(randomSource, 0, interceptSd);
-
-                for (let withinIndex = 0; withinIndex < withinCombinations.length; withinIndex++) {
-                    const currentWithinLevels = withinCombinations[withinIndex];
-                    const levelIndices = [];
-                    let betweenPointer = 0;
-                    let withinPointer = 0;
-
-                    for (let factorIndex = 0; factorIndex < factors.length; factorIndex++) {
-                        if (factors[factorIndex].type === "b") {
-                            levelIndices.push(currentBetweenLevels[betweenPointer]);
-                            betweenPointer++;
-                        } else {
-                            levelIndices.push(currentWithinLevels[withinPointer]);
-                            withinPointer++;
-                        }
-                    }
-
-                    const globalIndex = getCellIndex(levelIndices);
-                    const value = means[globalIndex] + subjectOffset + randomNormal(randomSource, 0, residualSd);
-                    cellTotals[withinIndex] += value;
-                }
-            }
-
-            for (let withinIndex = 0; withinIndex < withinCombinations.length; withinIndex++) {
-                const currentWithinLevels = withinCombinations[withinIndex];
-                const levelIndices = [];
-                let betweenPointer = 0;
-                let withinPointer = 0;
-
-                for (let factorIndex = 0; factorIndex < factors.length; factorIndex++) {
-                    if (factors[factorIndex].type === "b") {
-                        levelIndices.push(currentBetweenLevels[betweenPointer]);
-                        betweenPointer++;
-                    } else {
-                        levelIndices.push(currentWithinLevels[withinPointer]);
-                        withinPointer++;
-                    }
-                }
-
-                const globalIndex = getCellIndex(levelIndices);
-                observedMeans[globalIndex] = cellTotals[withinIndex] / layout.participantsPerBetweenCell;
-            }
-        }
-
-        return observedMeans;
-    }
-
-    function getEffectErrorVariance(effectDefinition, sd, withinCorrelation) {
-        const baseVariance = Math.pow(sd, 2);
-
-        if (!effectDefinition.hasWithin) {
-            return baseVariance;
-        }
-
-        return baseVariance * Math.max(1 - withinCorrelation, 1e-6);
-    }
-
-    function computeEffectStatistics(effectDefinition, means, layout, sd, withinCorrelation, alpha) {
-        const projectedMeans = multiplyMatrixVector(effectDefinition.projection, means);
-        const signalSumSquares = sum(
-            projectedMeans.map(function (value) {
-                return value * value;
-            }),
-        );
-        const errorVariance = getEffectErrorVariance(effectDefinition, sd, withinCorrelation);
-        const cohenFSquared = errorVariance <= Number.EPSILON ? 0 : signalSumSquares / (means.length * errorVariance);
-        const cohenF = Math.sqrt(Math.max(cohenFSquared, 0));
-        const partialEtaSquared = cohenFSquared <= 0 ? 0 : cohenFSquared / (1 + cohenFSquared);
-        const df2 = Math.max(1, layout.betweenDf * effectDefinition.withinDf);
-        const lambda = errorVariance <= Number.EPSILON ? 0 : (layout.participantsPerBetweenCell * signalSumSquares) / errorVariance;
-        const powerStatistics = approximateFPower(effectDefinition.df1, df2, lambda, alpha);
 
         return {
-            cohenFSquared: cohenFSquared,
-            cohenF: cohenF,
-            partialEtaSquared: partialEtaSquared,
-            df2: df2,
-            criticalValue: powerStatistics.criticalValue,
-            lambda: lambda,
-            power: powerStatistics.power,
+            sampleSize: result.sampleSize,
+            totalSampleSize: result.totalSampleSize,
+            lambda: result.lambda,
+            criticalF: result.criticalF,
+            criticalValue: result.criticalValue,
+            numeratorDf: result.numeratorDf,
+            denominatorDf: result.denominatorDf,
+            df1: result.df1,
+            df2: result.df2,
+            actualPower: result.actualPower,
+            power: result.actualPower,
         };
     }
 
-    function getDominantEffectSummary(effectSummaries) {
-        if (!effectSummaries || effectSummaries.length === 0) {
+    function hasSingleBetweenAndWithinFactor(factors) {
+        return getBetweenFactors(factors).length === 1 && getWithinFactors(factors).length === 1 && factors.length === 2;
+    }
+
+    function computeAnovaRowsAtSampleSize(options, totalParticipants) {
+        const factors = normalizeFactors(options.factors);
+        const effectSizeF = Math.max(0, Number(options.effectSizeF) || 0);
+        const alpha = Number(options.alpha) || DEFAULT_ALPHA;
+        const withinCorrelation = clamp(Number(options.withinCorrelation) || DEFAULT_WITHIN_CORRELATION, -0.999999, 0.999999);
+        const epsilon = normalizePositiveNumber(options.epsilon, 1);
+        const betweenFactors = getBetweenFactors(factors);
+        const withinFactors = getWithinFactors(factors);
+        const betweenCells = getBetweenCellCount(factors);
+        const alignedParticipants = hasSingleBetweenAndWithinFactor(factors)
+            ? alignTotalSampleSizeToGroups(totalParticipants, betweenCells)
+            : Math.max(2, parseInt(totalParticipants, 10) || 2);
+        const subjectDfBase = Math.max(1, alignedParticipants - betweenCells);
+
+        return buildEffectDefinitions(factors).map(function (effect) {
+            if (hasSingleBetweenAndWithinFactor(factors) && effect.hasBetween && effect.hasWithin) {
+                const mixedInteraction = computeRepeatedMeasuresWithinBetweenInteractionPower({
+                    effectSizeF: effectSizeF,
+                    alpha: alpha,
+                    totalSampleSize: alignedParticipants,
+                    numberOfGroups: betweenFactors[0].levels.length,
+                    numberOfMeasurements: withinFactors[0].levels.length,
+                    corrAmongRepMeasures: withinCorrelation,
+                    epsilon: epsilon,
+                });
+
+                return {
+                    label: effect.label,
+                    effectType: "mixed interaction",
+                    df1: mixedInteraction.df1,
+                    df2: mixedInteraction.df2,
+                    lambda: mixedInteraction.lambda,
+                    criticalValue: mixedInteraction.criticalValue,
+                    power: mixedInteraction.actualPower,
+                    cohenF: effectSizeF,
+                    partialEtaSquared: fToPartialEtaSquared(effectSizeF),
+                };
+            }
+
+            const denominatorDf = effect.hasWithin ? Math.max(1, subjectDfBase * effect.df1 * epsilon) : subjectDfBase;
+            const lambdaWeight = getAnovaLambdaWeight(effect, factors, withinCorrelation);
+            const lambda = Math.max(0, effectSizeF * effectSizeF * alignedParticipants * lambdaWeight);
+            const powerResult = computeFPower(effect.df1, denominatorDf, lambda, alpha);
+
+            return {
+                label: effect.label,
+                effectType: effect.hasWithin && effect.hasBetween ? "mixed interaction" : effect.hasWithin ? "within" : "between",
+                df1: effect.df1,
+                df2: denominatorDf,
+                lambda: lambda,
+                criticalValue: powerResult.criticalValue,
+                power: powerResult.power,
+                cohenF: effectSizeF,
+                partialEtaSquared: fToPartialEtaSquared(effectSizeF),
+            };
+        });
+    }
+
+    function getControllingEffect(effectRows) {
+        if (!effectRows.length) {
             return null;
         }
 
-        const mainEffects = effectSummaries.filter(function (summary) {
-            return summary.definition.indices.length === 1;
-        });
-        const candidateEffects = mainEffects.length > 0 ? mainEffects : effectSummaries;
-
-        return candidateEffects.reduce(function (best, current) {
-            if (!best || (current.cohenF || 0) > (best.cohenF || 0)) {
-                return current;
+        return effectRows.reduce(function (currentMinimum, row) {
+            if (!currentMinimum || row.power < currentMinimum.power) {
+                return row;
             }
 
-            return best;
+            return currentMinimum;
         }, null);
     }
 
-    function prepareEffectSummaries(factors, means, layout, sd, withinCorrelation, alpha) {
-        const effects = buildEffectDefinitions(factors);
+    function searchMinimumSampleSize(findPowerAtSampleSize, minimumN, targetPower, stepSize) {
+        const effectiveStepSize = Math.max(1, parseInt(stepSize, 10) || 1);
+        let upperBound = Math.max(effectiveStepSize, minimumN);
+        let upperResult = findPowerAtSampleSize(upperBound);
+        let iterations = 0;
 
-        return effects.map(function (effectDefinition) {
-            const statistics = computeEffectStatistics(effectDefinition, means, layout, sd, withinCorrelation, alpha);
+        while (upperResult.controllingPower < targetPower && upperBound < MAX_SEARCH_PARTICIPANTS && iterations < MAX_SEARCH_ITERATIONS) {
+            const nextUpperBound = Math.min(MAX_SEARCH_PARTICIPANTS, upperBound * 2);
 
+            if (nextUpperBound <= upperBound) {
+                break;
+            }
+
+            upperBound = nextUpperBound;
+            upperResult = findPowerAtSampleSize(upperBound);
+            iterations++;
+        }
+
+        if (upperResult.controllingPower < targetPower) {
             return {
-                definition: effectDefinition,
-                partialEtaSquared: statistics.partialEtaSquared,
-                cohenF: statistics.cohenF,
-                df2: statistics.df2,
-                criticalValue: statistics.criticalValue,
-                lambda: statistics.lambda,
-                power: statistics.power,
-            };
-        });
-    }
-
-    function estimateAnovaPower(options) {
-        const factors = normalizeFactors(options.factors);
-
-        if (factors.length === 0) {
-            return {
-                rows: [],
-                sampleSize: 0,
-                simulations: 0,
+                minimumN: upperBound,
+                result: upperResult,
             };
         }
 
-        const sd = Math.max(0.001, Number(options.sd) || 0.001);
-        const alpha = Number(options.alpha) || DEFAULT_ALPHA;
-        const withinCorrelation = clamp(Number(options.withinCorrelation) || DEFAULT_WITHIN_CORRELATION, 0, 0.95);
-        const layout = buildLayout(factors, Number(options.totalParticipants) || getTotalCellCount(factors));
-        const means = buildConditionMeans(factors, options.delta, options.means);
-        const effectSummaries = prepareEffectSummaries(factors, means, layout, sd, withinCorrelation, alpha);
+        let bestN = upperBound;
+        let left = minimumN;
+        let right = upperBound;
+
+        while (left <= right) {
+            const middle = Math.max(effectiveStepSize, Math.floor((left + right) / (2 * effectiveStepSize)) * effectiveStepSize);
+            const middleResult = findPowerAtSampleSize(middle);
+
+            if (middleResult.controllingPower >= targetPower) {
+                bestN = middle;
+                right = middle - effectiveStepSize;
+            } else {
+                left = middle + effectiveStepSize;
+            }
+        }
 
         return {
-            means: means,
-            sampleSize: layout.balancedParticipants,
-            simulations: 0,
-            rows: effectSummaries.map(function (effectSummary) {
+            minimumN: bestN,
+            result: findPowerAtSampleSize(bestN),
+        };
+    }
+
+    function buildCurvePoints(findPowerAtSampleSize, minimumN, stepSize) {
+        const points = [];
+        const effectiveStepSize = Math.max(1, parseInt(stepSize, 10) || 1);
+        const maxN = Math.min(MAX_SEARCH_PARTICIPANTS, Math.max(minimumN + 24, Math.ceil(minimumN * 1.8)));
+        const step = Math.max(effectiveStepSize, Math.ceil((maxN - effectiveStepSize) / Math.max(1, MAX_CURVE_POINTS - 2)));
+
+        for (let sampleSize = effectiveStepSize; sampleSize <= maxN; sampleSize += step) {
+            points.push({
+                totalParticipants: sampleSize,
+                rows: findPowerAtSampleSize(sampleSize).rows,
+            });
+        }
+
+        if (!points.length || points[points.length - 1].totalParticipants !== minimumN) {
+            points.push({
+                totalParticipants: minimumN,
+                rows: findPowerAtSampleSize(minimumN).rows,
+            });
+        }
+
+        return points.sort(function (left, right) {
+            return left.totalParticipants - right.totalParticipants;
+        });
+    }
+
+    function estimateAnovaModel(options) {
+        const factors = normalizeFactors(options.factors);
+        const includeCurvePoints = options.includeCurvePoints !== false;
+
+        if (!factors.length) {
+            return {
+                effectRows: [],
+                curvePoints: [],
+                minimumN: 0,
+                controllingEffect: null,
+            };
+        }
+
+        const targetPower = clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 0.01, 0.999);
+        const groupedMixedDesign = hasSingleBetweenAndWithinFactor(factors);
+        const stepSize = groupedMixedDesign ? getBetweenCellCount(factors) : 1;
+        const minimumNFloor = groupedMixedDesign ? stepSize * 2 : Math.max(4, getBetweenCellCount(factors) + 2);
+        const findPowerAtSampleSize = function (sampleSize) {
+            const alignedSampleSize = groupedMixedDesign ? alignTotalSampleSizeToGroups(sampleSize, stepSize) : sampleSize;
+            const rows = computeAnovaRowsAtSampleSize(options, alignedSampleSize);
+            const controllingEffect = getControllingEffect(rows);
+
+            return {
+                rows: rows,
+                controllingEffect: controllingEffect,
+                controllingPower: controllingEffect ? controllingEffect.power : 0,
+            };
+        };
+        const searchResult = searchMinimumSampleSize(findPowerAtSampleSize, minimumNFloor, targetPower, stepSize);
+
+        return {
+            sampleSize: groupedMixedDesign ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
+            minimumN: groupedMixedDesign ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
+            targetPower: targetPower,
+            effectRows: searchResult.result.rows,
+            controllingEffect: searchResult.result.controllingEffect,
+            curvePoints: includeCurvePoints
+                ? buildCurvePoints(
+                      findPowerAtSampleSize,
+                      groupedMixedDesign ? alignTotalSampleSizeToGroups(searchResult.minimumN, stepSize) : searchResult.minimumN,
+                      stepSize,
+                  )
+                : [],
+        };
+    }
+
+    function estimateAnovaPower(options) {
+        const totalParticipants = Math.max(2, parseInt(options.totalParticipants, 10) || 2);
+        const rows = computeAnovaRowsAtSampleSize(options, totalParticipants);
+
+        return {
+            sampleSize: totalParticipants,
+            rows: rows.map(function (row) {
                 return {
-                    _row: effectSummary.definition.label,
-                    power: roundTo(effectSummary.power * 100, 1),
-                    partial_eta_squared: roundTo(effectSummary.partialEtaSquared, 3),
-                    cohen_f: roundTo(effectSummary.cohenF, 3),
+                    _row: row.label,
+                    power: roundTo(row.power * 100, 1),
+                    partial_eta_squared: roundTo(row.partialEtaSquared, 3),
+                    cohen_f: roundTo(row.cohenF, 3),
+                    df1: row.df1,
+                    df2: row.df2,
                 };
             }),
         };
     }
 
     function estimateAnovaEffectSizes(options) {
-        const factors = normalizeFactors(options.factors);
-
-        if (factors.length === 0) {
+        const effectSizeF = Math.max(0, Number(options.effectSizeF) || 0);
+        const rows = buildEffectDefinitions(normalizeFactors(options.factors)).map(function (effect) {
             return {
-                representative: null,
-                rows: [],
+                label: effect.label,
+                cohenF: effectSizeF,
+                partialEtaSquared: fToPartialEtaSquared(effectSizeF),
             };
-        }
-
-        const sd = Math.max(0.001, Number(options.sd) || 0.001);
-        const alpha = Number(options.alpha) || DEFAULT_ALPHA;
-        const withinCorrelation = clamp(Number(options.withinCorrelation) || DEFAULT_WITHIN_CORRELATION, 0, 0.95);
-        const layout = buildLayout(factors, Math.max(2, Number(options.totalParticipants) || getTotalCellCount(factors)));
-        const means = buildConditionMeans(factors, options.delta, options.means);
-        const effectSummaries = prepareEffectSummaries(factors, means, layout, sd, withinCorrelation, alpha);
-        const representative = getDominantEffectSummary(effectSummaries);
+        });
 
         return {
-            representative: representative
+            representative: rows.length
                 ? {
-                      label: representative.definition.label,
-                      cohenF: representative.cohenF,
-                      partialEtaSquared: representative.partialEtaSquared,
+                      label: rows[0].label,
+                      cohenF: effectSizeF,
+                      partialEtaSquared: fToPartialEtaSquared(effectSizeF),
                   }
                 : null,
-            rows: effectSummaries.map(function (effectSummary) {
-                return {
-                    label: effectSummary.definition.label,
-                    cohenF: effectSummary.cohenF,
-                    partialEtaSquared: effectSummary.partialEtaSquared,
-                };
-            }),
-        };
-    }
-
-    function estimateRepresentativeEffectAtSampleSize(factors, means, sampleSize, sd, withinCorrelation, alpha) {
-        const layout = buildLayout(factors, sampleSize);
-        const effectSummaries = prepareEffectSummaries(factors, means, layout, sd, withinCorrelation, alpha);
-
-        return {
-            layout: layout,
-            effectSummaries: effectSummaries,
-            representative: getDominantEffectSummary(effectSummaries),
+            rows: rows,
         };
     }
 
     function estimateSampleSizeForAnova(options) {
-        const factors = normalizeFactors(options.factors);
+        return estimateAnovaModel(
+            Object.assign({}, options, {
+                includeCurvePoints: false,
+            }),
+        );
+    }
 
-        if (factors.length === 0) {
-            return {
-                sampleSize: 0,
-                powerResult: { rows: [] },
-            };
-        }
+    function computeIndependentTTest(totalParticipants, cohenD, alpha) {
+        const df2 = Math.max(1, totalParticipants - 2);
+        const cohenF = dToF(cohenD);
+        const lambda = totalParticipants * cohenF * cohenF;
+        const powerResult = computeFPower(1, df2, lambda, alpha);
 
-        const sd = Math.max(0.001, Number(options.sd) || 0.001);
+        return {
+            sampleSize: totalParticipants,
+            power: powerResult.power,
+            lambda: lambda,
+            criticalValue: powerResult.criticalValue,
+            df1: 1,
+            df2: df2,
+            cohenD: Math.abs(cohenD),
+            cohenF: cohenF,
+            partialEtaSquared: dToPartialEtaSquared(cohenD),
+        };
+    }
+
+    function computePairedTTest(totalParticipants, cohenD, withinCorrelation, alpha) {
+        const df2 = Math.max(1, totalParticipants - 1);
+        const dz = Math.abs(cohenD) / Math.sqrt(Math.max(2 * (1 - withinCorrelation), 0.05));
+        const lambda = totalParticipants * dz * dz;
+        const powerResult = computeFPower(1, df2, lambda, alpha);
+
+        return {
+            sampleSize: totalParticipants,
+            power: powerResult.power,
+            lambda: lambda,
+            criticalValue: powerResult.criticalValue,
+            df1: 1,
+            df2: df2,
+            cohenD: Math.abs(cohenD),
+            cohenDz: dz,
+            cohenF: Math.sqrt(lambda / totalParticipants),
+            partialEtaSquared: lambda / (lambda + df2),
+        };
+    }
+
+    function estimateTTestModel(options) {
+        const paired = Boolean(options.paired);
+        const includeCurvePoints = options.includeCurvePoints !== false;
+        const alpha = Number(options.alpha) || DEFAULT_ALPHA;
+        const targetPower = clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 0.01, 0.999);
+        const withinCorrelation = clamp(Number(options.withinCorrelation) || DEFAULT_WITHIN_CORRELATION, 0, 0.95);
+        const cohenD = Math.abs(Number(options.cohenD) || 0);
+        const evaluate = function (sampleSize) {
+            return paired ? computePairedTTest(sampleSize, cohenD, withinCorrelation, alpha) : computeIndependentTTest(sampleSize, cohenD, alpha);
+        };
+        const minimumNFloor = paired ? 4 : 6;
+        const searchResult = searchMinimumSampleSize(
+            function (sampleSize) {
+                const result = evaluate(sampleSize);
+
+                return {
+                    rows: [result],
+                    controllingEffect: result,
+                    controllingPower: result.power,
+                };
+            },
+            minimumNFloor,
+            targetPower,
+            1,
+        );
+
+        return {
+            sampleSize: searchResult.minimumN,
+            minimumN: searchResult.minimumN,
+            targetPower: targetPower,
+            paired: paired,
+            effectRow: searchResult.result.controllingEffect,
+            curvePoints: includeCurvePoints
+                ? buildCurvePoints(
+                      function (sampleSize) {
+                          return {
+                              rows: [evaluate(sampleSize)],
+                          };
+                      },
+                      searchResult.minimumN,
+                      1,
+                  )
+                : [],
+        };
+    }
+
+    function estimateTTestPower(options) {
+        const paired = Boolean(options.paired);
         const alpha = Number(options.alpha) || DEFAULT_ALPHA;
         const withinCorrelation = clamp(Number(options.withinCorrelation) || DEFAULT_WITHIN_CORRELATION, 0, 0.95);
-        const targetPower = clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 0.01, 0.999);
-        const totalCells = getTotalCellCount(factors);
-        const betweenCells = getBetweenCellCount(factors);
-        const means = buildConditionMeans(factors, options.delta, options.means);
-        const step = Math.max(DEFAULT_SAMPLE_SIZE_STEP, totalCells);
-        const minimumParticipants = roundUpToMultiple(Math.max(totalCells, betweenCells * 2), step);
+        const cohenD = Math.abs(Number(options.cohenD) || 0);
+        const participants = Math.max(paired ? 4 : 6, parseInt(options.participants, 10) || (paired ? 4 : 6));
 
-        let lower = minimumParticipants;
-        let upper = minimumParticipants;
-        let upperResult = estimateRepresentativeEffectAtSampleSize(factors, means, upper, sd, withinCorrelation, alpha);
-
-        while (upperResult.representative && upperResult.representative.power < targetPower && upper < MAX_SEARCH_PARTICIPANTS) {
-            lower = upper + step;
-            upper = roundUpToMultiple(Math.min(MAX_SEARCH_PARTICIPANTS, upper * 2), step);
-            upperResult = estimateRepresentativeEffectAtSampleSize(factors, means, upper, sd, withinCorrelation, alpha);
-
-            if (upper === MAX_SEARCH_PARTICIPANTS) {
-                break;
-            }
-        }
-
-        let estimatedParticipants = upper;
-
-        if (upperResult.representative && upperResult.representative.power >= targetPower) {
-            let left = minimumParticipants;
-            let right = upper;
-
-            while (left <= right) {
-                const middle = roundUpToMultiple(Math.floor((left + right) / 2), step);
-                const candidate = estimateRepresentativeEffectAtSampleSize(factors, means, middle, sd, withinCorrelation, alpha);
-
-                if (candidate.representative && candidate.representative.power >= targetPower) {
-                    estimatedParticipants = middle;
-                    right = middle - step;
-                } else {
-                    left = middle + step;
-                }
-            }
-        }
-
-        estimatedParticipants = Math.min(MAX_SEARCH_PARTICIPANTS, roundUpToMultiple(estimatedParticipants, step));
-
-        return {
-            sampleSize: estimatedParticipants,
-            powerResult: estimateAnovaPower({
-                factors: factors,
-                means: means,
-                sd: sd,
-                totalParticipants: estimatedParticipants,
-                alpha: alpha,
-                withinCorrelation: withinCorrelation,
-            }),
-        };
+        return paired ? computePairedTTest(participants, cohenD, withinCorrelation, alpha) : computeIndependentTTest(participants, cohenD, alpha);
     }
 
-    function transpose(matrix) {
-        return matrix[0].map(function (_, columnIndex) {
-            return matrix.map(function (row) {
-                return row[columnIndex];
-            });
-        });
-    }
-
-    function multiplyMatrices(left, right) {
-        const result = [];
-
-        for (let row = 0; row < left.length; row++) {
-            const currentRow = [];
-
-            for (let column = 0; column < right[0].length; column++) {
-                let total = 0;
-
-                for (let index = 0; index < right.length; index++) {
-                    total += left[row][index] * right[index][column];
-                }
-
-                currentRow.push(total);
-            }
-
-            result.push(currentRow);
-        }
-
-        return result;
-    }
-
-    function invertMatrix(matrix) {
-        const size = matrix.length;
-        const augmented = matrix.map(function (row, rowIndex) {
-            const identityRow = new Array(size).fill(0);
-            identityRow[rowIndex] = 1;
-            return row.slice().concat(identityRow);
-        });
-
-        for (let pivot = 0; pivot < size; pivot++) {
-            let maxRow = pivot;
-
-            for (let row = pivot + 1; row < size; row++) {
-                if (Math.abs(augmented[row][pivot]) > Math.abs(augmented[maxRow][pivot])) {
-                    maxRow = row;
-                }
-            }
-
-            if (Math.abs(augmented[maxRow][pivot]) < 1e-10) {
-                return null;
-            }
-
-            if (maxRow !== pivot) {
-                const temp = augmented[pivot];
-                augmented[pivot] = augmented[maxRow];
-                augmented[maxRow] = temp;
-            }
-
-            const pivotValue = augmented[pivot][pivot];
-
-            for (let column = 0; column < augmented[pivot].length; column++) {
-                augmented[pivot][column] /= pivotValue;
-            }
-
-            for (let row = 0; row < size; row++) {
-                if (row === pivot) {
-                    continue;
-                }
-
-                const factor = augmented[row][pivot];
-
-                for (let column = 0; column < augmented[row].length; column++) {
-                    augmented[row][column] -= factor * augmented[pivot][column];
-                }
-            }
-        }
-
-        return augmented.map(function (row) {
-            return row.slice(size);
-        });
-    }
-
-    function multiplyMatrixAndVector(matrix, vector) {
-        return matrix.map(function (row) {
-            let total = 0;
-
-            for (let index = 0; index < vector.length; index++) {
-                total += row[index] * vector[index];
-            }
-
-            return total;
-        });
-    }
-
-    function fitLinearModel(designMatrix, response) {
-        const xTranspose = transpose(designMatrix);
-        const xTx = multiplyMatrices(xTranspose, designMatrix);
-        const inverse = invertMatrix(xTx);
-
-        if (!inverse) {
-            return null;
-        }
-
-        const xTy = multiplyMatrixAndVector(xTranspose, response);
-        const coefficients = multiplyMatrixAndVector(inverse, xTy);
-        const fitted = designMatrix.map(function (row) {
-            let total = 0;
-
-            for (let index = 0; index < row.length; index++) {
-                total += row[index] * coefficients[index];
-            }
-
-            return total;
-        });
-        const responseMean = average(response);
-        let sse = 0;
-        let sst = 0;
-
-        for (let index = 0; index < response.length; index++) {
-            sse += Math.pow(response[index] - fitted[index], 2);
-            sst += Math.pow(response[index] - responseMean, 2);
-        }
-
-        return {
-            coefficients: coefficients,
-            sse: sse,
-            sst: sst,
-        };
-    }
-
-    function getRegressionFsquared(delta, sd) {
-        const safeSd = Math.max(sd, 0.001);
-        const standardizedEffect = delta / safeSd;
-        return Math.max(0.005, Math.pow(standardizedEffect / Math.SQRT2, 2));
-    }
-
-    function estimateRegressionModelStatistics(predictors, participants, delta, sd, alpha) {
+    function estimateRegressionModelStatistics(predictors, participants, effectSizeFSquared, alpha) {
         const numeratorDf = Math.max(1, predictors);
         const denominatorDf = Math.max(1, participants - predictors - 1);
-        const fSquared = getRegressionFsquared(delta, sd);
-        const lambda = fSquared * (numeratorDf + denominatorDf + 1);
-        const rSquared = fSquared / (1 + fSquared);
-        const powerStatistics = approximateFPower(numeratorDf, denominatorDf, lambda, alpha);
+        const lambda = Math.max(0, Number(effectSizeFSquared) || 0) * participants;
+        const rSquared = effectSizeFSquared <= 0 ? 0 : effectSizeFSquared / (1 + effectSizeFSquared);
+        const powerResult = computeFPower(numeratorDf, denominatorDf, lambda, alpha);
 
         return {
             numeratorDf: numeratorDf,
             denominatorDf: denominatorDf,
-            fSquared: fSquared,
-            rSquared: rSquared,
             lambda: lambda,
-            criticalValue: powerStatistics.criticalValue,
-            power: powerStatistics.power,
+            criticalValue: powerResult.criticalValue,
+            power: powerResult.power,
+            fSquared: effectSizeFSquared,
+            rSquared: rSquared,
         };
     }
 
@@ -1162,82 +885,99 @@
         const predictors = Math.max(1, parseInt(options.predictors, 10) || 1);
         const participants = Math.max(predictors + 3, parseInt(options.participants, 10) || predictors + 3);
         const alpha = Number(options.alpha) || DEFAULT_ALPHA;
-        const modelStatistics = estimateRegressionModelStatistics(predictors, participants, Number(options.delta) || 0, Number(options.sd) || 0.001, alpha);
-        const fSquared = modelStatistics.fSquared;
-        const power = modelStatistics.power;
+        const effectSizeFSquared = Math.max(0, Number(options.effectSizeFSquared) || 0);
+        const result = estimateRegressionModelStatistics(predictors, participants, effectSizeFSquared, alpha);
 
         return {
             predictors: predictors,
             participants: participants,
-            fSquared: roundTo(modelStatistics.fSquared, 3),
+            fSquared: result.fSquared,
             alpha: alpha,
-            power: roundTo(modelStatistics.power, 3),
+            power: result.power,
             tableRows: [
-                { label: "Number of regression coefficients (predictors)", value: predictors },
-                { label: "Numerator degrees of freedom (<i>u</i>)", value: modelStatistics.numeratorDf },
-                { label: "Denominator degrees of freedom (<i>v</i>)", value: modelStatistics.denominatorDf },
-                { label: "Effect size (<i>f²</i>)", value: roundTo(fSquared, 3) },
-                { label: "Model <i>R<sup>2</sup></i>", value: roundTo(modelStatistics.rSquared, 3) },
-                { label: "Significance level", value: roundTo(alpha, 3) },
-                { label: "Statistical power", value: roundTo(clamp(modelStatistics.power, 0, 1) * 100, 1) + "%" },
+                { label: "Predictors", value: predictors },
+                { label: "Numerator df (u)", value: result.numeratorDf },
+                { label: "Denominator df (v)", value: result.denominatorDf },
+                { label: "Effect size (f^2)", value: roundTo(result.fSquared, 3) },
+                { label: "Expected R^2", value: roundTo(result.rSquared, 3) },
+                { label: "Lambda", value: roundTo(result.lambda, 3) },
+                { label: "Power", value: roundTo(result.power * 100, 1) + "%" },
             ],
         };
     }
 
     function estimateSampleSizeForRegression(options) {
         const predictors = Math.max(1, parseInt(options.predictors, 10) || 1);
-        const targetPower = Number(options.targetPower) || DEFAULT_TARGET_POWER;
+        const includeCurvePoints = options.includeCurvePoints !== false;
+        const targetPower = clamp(Number(options.targetPower) || DEFAULT_TARGET_POWER, 0.01, 0.999);
         const alpha = Number(options.alpha) || DEFAULT_ALPHA;
-        const delta = Number(options.delta) || 0;
-        const sd = Number(options.sd) || 0.001;
-        const minimumParticipants = Math.max(predictors + 3, 8);
+        const effectSizeFSquared = Math.max(0, Number(options.effectSizeFSquared) || 0);
+        const minimumNFloor = Math.max(predictors + 3, 8);
+        const searchResult = searchMinimumSampleSize(
+            function (sampleSize) {
+                const result = estimateRegressionModelStatistics(predictors, sampleSize, effectSizeFSquared, alpha);
 
-        let upperBound = minimumParticipants;
-        let upperPower = estimateRegressionModelStatistics(predictors, upperBound, delta, sd, alpha).power;
-
-        while (upperPower < targetPower && upperBound < MAX_SEARCH_PARTICIPANTS) {
-            upperBound = Math.min(MAX_SEARCH_PARTICIPANTS, upperBound * 2);
-            upperPower = estimateRegressionModelStatistics(predictors, upperBound, delta, sd, alpha).power;
-        }
-
-        let bestSampleSize = upperBound;
-
-        if (upperPower >= targetPower) {
-            let left = minimumParticipants;
-            let right = upperBound;
-
-            while (left <= right) {
-                const middle = Math.floor((left + right) / 2);
-                const middlePower = estimateRegressionModelStatistics(predictors, middle, delta, sd, alpha).power;
-
-                if (middlePower >= targetPower) {
-                    bestSampleSize = middle;
-                    right = middle - 1;
-                } else {
-                    left = middle + 1;
-                }
-            }
-        }
+                return {
+                    rows: [result],
+                    controllingEffect: result,
+                    controllingPower: result.power,
+                };
+            },
+            minimumNFloor,
+            targetPower,
+            1,
+        );
 
         return {
-            sampleSize: bestSampleSize,
+            sampleSize: searchResult.minimumN,
+            minimumN: searchResult.minimumN,
+            targetPower: targetPower,
+            effectRow: searchResult.result.controllingEffect,
+            curvePoints: includeCurvePoints
+                ? buildCurvePoints(
+                      function (sampleSize) {
+                          return {
+                              rows: [estimateRegressionModelStatistics(predictors, sampleSize, effectSizeFSquared, alpha)],
+                          };
+                      },
+                      searchResult.minimumN,
+                      1,
+                  )
+                : [],
             powerResult: estimateRegressionPower({
                 predictors: predictors,
-                participants: bestSampleSize,
-                delta: delta,
-                sd: sd,
+                participants: searchResult.minimumN,
+                effectSizeFSquared: effectSizeFSquared,
                 alpha: alpha,
             }),
         };
     }
 
-    global.StudyPowerEngine = {
+    const exportedApi = {
         parseStudyDesign: parseStudyDesign,
-        buildConditionMeans: buildConditionMeans,
+        dToF: dToF,
+        fToD: fToD,
+        fToPartialEtaSquared: fToPartialEtaSquared,
+        partialEtaSquaredToF: partialEtaSquaredToF,
+        dToPartialEtaSquared: dToPartialEtaSquared,
+        partialEtaSquaredToD: partialEtaSquaredToD,
+        fCdf: fCdf,
+        invertFCdf: invertFCdf,
+        noncentralFCdf: noncentralFCdf,
         estimateAnovaEffectSizes: estimateAnovaEffectSizes,
         estimateAnovaPower: estimateAnovaPower,
+        estimateAnovaModel: estimateAnovaModel,
         estimateSampleSizeForAnova: estimateSampleSizeForAnova,
+        estimatePowerForRepeatedMeasuresWithinBetweenInteraction: estimatePowerForRepeatedMeasuresWithinBetweenInteraction,
+        estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction: estimateSampleSizeForRepeatedMeasuresWithinBetweenInteraction,
+        estimateTTestModel: estimateTTestModel,
+        estimateTTestPower: estimateTTestPower,
         estimateRegressionPower: estimateRegressionPower,
         estimateSampleSizeForRegression: estimateSampleSizeForRegression,
+        getTotalCellCount: getTotalCellCount,
+        getBetweenCellCount: getBetweenCellCount,
     };
+
+    global.StudyPowerEngine = exportedApi;
+    global.PowerEngine = exportedApi;
 })(window);
