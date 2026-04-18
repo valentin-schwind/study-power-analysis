@@ -10,10 +10,56 @@
     <link rel="stylesheet" href="_css/bootstrap-table.min.css" />
     <link rel="stylesheet" href="_css/bootstrap-icons.css" />
     <link rel="stylesheet" href="_css/style.css" />
-    <link rel="shortcut icon" href="favicon.ico" type="image/x-icon" />
+    <link rel="icon" href="_img/hdmlogo.png" type="image/png" />
+    <link rel="canonical" href="https://valentin-schwind.github.io/study-power-analysis/" />
+
+    <meta name="description" content="Browser-based study design and power analysis planner for HCI research. Build ANOVA, t-test, and regression designs, estimate effect sizes, and compute minimum and required sample sizes." />
+    <meta name="robots" content="index,follow,max-image-preview:large" />
 
     <meta property="og:site_name" content="Study Design and Power Analysis Planner" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Study Design and Power Analysis Planner" />
+    <meta property="og:description" content="Plan HCI studies with browser-based power analysis for ANOVA, t-tests, and regression, including minimum and required sample sizes." />
+    <meta property="og:url" content="https://valentin-schwind.github.io/study-power-analysis/" />
+    <meta property="og:image" content="https://valentin-schwind.github.io/study-power-analysis/_img/hdmlogo.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Study Design and Power Analysis Planner" />
+    <meta name="twitter:description" content="Browser-based study design and power analysis planner for ANOVA, t-tests, and regression." />
+    <meta name="twitter:image" content="https://valentin-schwind.github.io/study-power-analysis/_img/hdmlogo.png" />
     <title>Study Design and Power Analysis Planner</title>
+
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "SoftwareApplication",
+            "name": "Study Design and Power Analysis Planner",
+            "applicationCategory": "EducationalApplication",
+            "operatingSystem": "Any",
+            "browserRequirements": "Requires JavaScript and a modern web browser",
+            "url": "https://valentin-schwind.github.io/study-power-analysis/",
+            "codeRepository": "https://github.com/valentin-schwind/study-power-analysis",
+            "image": "https://valentin-schwind.github.io/study-power-analysis/_img/hdmlogo.png",
+            "description": "Browser-based study design and power analysis planner for HCI research with support for ANOVA, t-tests, regression, minimum N, required N, and placeholder data generation.",
+            "offers": {
+                "@type": "Offer",
+                "price": "0",
+                "priceCurrency": "USD"
+            },
+            "creator": {
+                "@type": "Person",
+                "name": "Valentin Schwind"
+            },
+            "keywords": [
+                "power analysis",
+                "sample size",
+                "ANOVA",
+                "t-test",
+                "regression",
+                "HCI user studies",
+                "study design"
+            ]
+        }
+    </script>
 </head>
 <body>
     <script src="_js/jquery-3.6.0.min.js"></script>
@@ -40,9 +86,24 @@
                         <h1 id="demographicsTitle">Study Design and Power Analysis Planner</h1>
 
                         <p class="intro">
-                            This tool is designed to plan and evaluate your study for HCI research. Enter your independent and dependent variables, estimate the difference between extreme measures and their pooled standard deviation, and use the resulting guidance to prepare an appropriate design and statistical testing strategy. The planner runs its core power-related estimates directly in the browser using simulation-based approximations inspired by common ANOVA and regression workflows. It offers quick-start guidance and does not replace careful methodological planning or supervisory input.
+                            This browser-based tool helps researchers, students, and HCI practitioners plan quantitative user studies with a-priori power analysis. Enter your independent and dependent variables, estimate effect sizes, and generate guidance for ANOVA, t-tests, and regression including minimum and required sample sizes. The planner runs its core statistical calculations directly in JavaScript in the browser and is intended as a practical starting point for study design, sample-size planning, and analysis preparation.
                         </p>
                     </header>
+
+                    <section class="content-section">
+                        <div class="section-heading">
+                            <h2><i class="bi bi-search me-2"></i>What This Tool Helps With</h2>
+                        </div>
+                        <p class="section-intro">Use the planner to prepare browser-based power analyses for common HCI user-study scenarios and document how your final sample-size recommendation was derived.</p>
+                        <div class="resource-list helper-list">
+                            <div class="resource-item d-flex flex-column align-items-stretch">
+                                <div class="resource-text">
+                                    <h3><i class="bi bi-check2-square me-2"></i>Supported planning tasks</h3>
+                                    <p>Study Design and Power Analysis Planner supports one-way and mixed ANOVA planning, independent and paired t-tests, multiple regression, effect-size conversion, required sample-size estimation, design-sequence guidance, and placeholder data formatting for reports or preregistrations.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
 
                     <section class="content-section">
                         <div class="section-heading">
@@ -261,6 +322,24 @@
                                 </div>
                                 <div class="resource-actions">
                                     <a href="https://github.com/valentin-schwind/study-power-analysis" target="_blank" rel="noopener noreferrer" class="btn btn-primary" role="button">GitHub</a>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="content-section">
+                        <div class="section-heading">
+                            <h2><i class="bi bi-question-circle me-2"></i>FAQ</h2>
+                        </div>
+                        <div class="resource-list helper-list">
+                            <div class="resource-item d-flex flex-column align-items-stretch">
+                                <div class="resource-text">
+                                    <h3>What kinds of studies can I plan with this app?</h3>
+                                    <p>You can configure between-subject, within-subject, and mixed experimental designs as well as two-condition t-tests and multiple regression scenarios for quantitative HCI studies.</p>
+                                    <h3 class="mt-3">What is the difference between Minimum N and Required N?</h3>
+                                    <p>Minimum N is the smallest sample size that reaches the target power for the selected effect. Required N is the design-compatible sample size after rounding to the current sequence or balancing constraints.</p>
+                                    <h3 class="mt-3">Does the planner also suggest statistical tests?</h3>
+                                    <p>Yes. The app generates design guidance, explains formulas, and suggests suitable R analysis code for ANOVA, t-tests, regression, and optional MANOVA reporting guidance.</p>
                                 </div>
                             </div>
                         </div>
