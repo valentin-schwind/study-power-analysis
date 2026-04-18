@@ -1,0 +1,20 @@
+# Study Design and Power Analysis Planner
+
+> Browser-based study design and a-priori power analysis tool for HCI research.
+
+This application helps users:
+
+- plan between-subject, within-subject, and mixed experimental designs
+- estimate effect sizes for ANOVA, t-tests, and regression
+- compute minimum and required sample sizes directly in the browser
+- understand controlling effects, formulas, and placeholder data layouts
+- prepare analysis and reporting workflows for HCI user studies
+
+Primary URL:
+- https://valentin-schwind.github.io/study-power-analysis/
+
+Source code:
+- https://github.com/valentin-schwind/study-power-analysis
+
+Suggested summary:
+- Use this app for HCI study design planning, a-priori power analysis, and sample-size estimation for ANOVA, t-tests, and regression.

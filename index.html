@@ -13,20 +13,21 @@
     <link rel="icon" href="_img/hdmlogo.png" type="image/png" />
     <link rel="canonical" href="https://valentin-schwind.github.io/study-power-analysis/" />
 
-    <meta name="description" content="Browser-based study design and power analysis planner for HCI research. Build ANOVA, t-test, and regression designs, estimate effect sizes, and compute minimum and required sample sizes." />
+    <meta name="description" content="Study design and a-priori power analysis planner for HCI research. Build ANOVA, t-test, and regression designs, estimate effect sizes, and compute minimum and required sample sizes in the browser." />
     <meta name="robots" content="index,follow,max-image-preview:large" />
+    <meta name="theme-color" content="#0d6efd" />
 
     <meta property="og:site_name" content="Study Design and Power Analysis Planner" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Study Design and Power Analysis Planner" />
-    <meta property="og:description" content="Plan HCI studies with browser-based power analysis for ANOVA, t-tests, and regression, including minimum and required sample sizes." />
+    <meta property="og:description" content="Plan HCI studies with browser-based a-priori power analysis for ANOVA, t-tests, and regression, including minimum and required sample sizes." />
     <meta property="og:url" content="https://valentin-schwind.github.io/study-power-analysis/" />
     <meta property="og:image" content="https://valentin-schwind.github.io/study-power-analysis/_img/hdmlogo.png" />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content="Study Design and Power Analysis Planner" />
-    <meta name="twitter:description" content="Browser-based study design and power analysis planner for ANOVA, t-tests, and regression." />
+    <meta name="twitter:description" content="Browser-based study design and a-priori power analysis planner for ANOVA, t-tests, and regression." />
     <meta name="twitter:image" content="https://valentin-schwind.github.io/study-power-analysis/_img/hdmlogo.png" />
-    <title>Study Design and Power Analysis Planner</title>
+    <title>Study Design and Power Analysis Planner for HCI | ANOVA, t-tests, Regression</title>
 
     <script type="application/ld+json">
         {
@@ -57,6 +58,47 @@
                 "regression",
                 "HCI user studies",
                 "study design"
+            ]
+        }
+    </script>
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            "name": "Study Design and Power Analysis Planner",
+            "url": "https://valentin-schwind.github.io/study-power-analysis/",
+            "description": "Browser-based study design and a-priori power analysis planner for HCI research."
+        }
+    </script>
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "FAQPage",
+            "mainEntity": [
+                {
+                    "@type": "Question",
+                    "name": "What kinds of studies can I plan with this app?",
+                    "acceptedAnswer": {
+                        "@type": "Answer",
+                        "text": "You can configure between-subject, within-subject, and mixed experimental designs as well as two-condition t-tests and multiple regression scenarios for quantitative HCI studies."
+                    }
+                },
+                {
+                    "@type": "Question",
+                    "name": "What is the difference between Minimum N and Required N?",
+                    "acceptedAnswer": {
+                        "@type": "Answer",
+                        "text": "Minimum N is the smallest sample size that reaches the target power for the selected effect. Required N is the design-compatible sample size after rounding to the current sequence or balancing constraints."
+                    }
+                },
+                {
+                    "@type": "Question",
+                    "name": "Does the planner also suggest statistical tests?",
+                    "acceptedAnswer": {
+                        "@type": "Answer",
+                        "text": "Yes. The app generates design guidance, explains formulas, and suggests suitable R analysis code for ANOVA, t-tests, regression, and optional MANOVA reporting guidance."
+                    }
+                }
             ]
         }
     </script>
