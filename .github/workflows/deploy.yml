@@ -43,9 +43,10 @@ jobs:
           HCISTUDIES_REMOTE_PATH: ${{ secrets.HCISTUDIES_REMOTE_PATH }}
         run: |
           set -euo pipefail
+          SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no -p ${HCISTUDIES_PORT}"
           sshpass -e rsync -az --delete --delete-excluded \
             --exclude='.git/' \
             --exclude='.github/' \
-            -e "ssh -p ${HCISTUDIES_PORT}" \
+            -e "${SSH_COMMAND}" \
             ./ \
             "${HCISTUDIES_USER}@${HCISTUDIES_HOST}:${HCISTUDIES_REMOTE_PATH}"
