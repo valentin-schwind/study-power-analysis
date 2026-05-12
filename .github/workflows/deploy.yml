@@ -57,6 +57,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          remote_path="${DEPLOY_REMOTE_PATH%/}"
+          remote_path_escaped="$(printf '%q' "$remote_path")"
+
+          if ! sshpass -e ssh -p "$HCISTUDIES_PORT" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR \
+            -o PreferredAuthentications=password \
+            -o PubkeyAuthentication=no \
+            -o NumberOfPasswordPrompts=1 \
+            "$HCISTUDIES_USER@$HCISTUDIES_HOST" \
+            "set -eu; if [ -d $remote_path_escaped ]; then ls -ld $remote_path_escaped; fi; if [ -w $remote_path_escaped ]; then printf '%s\n' 'REMOTE_PATH_WRITABLE=yes'; else printf '%s\n' 'REMOTE_PATH_WRITABLE=no'; exit 1; fi"; then
+            echo "::error::Remote deployment path is not writable"
+            exit 1
+          fi
+
           rsync_error_file="$(mktemp)"
 
           if ! rsync -az --delete \
