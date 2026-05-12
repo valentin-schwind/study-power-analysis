@@ -1,0 +1,51 @@
+name: Deploy to Webserver
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-webserver
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install deployment tools
+        run: sudo apt-get update && sudo apt-get install -y rsync sshpass
+
+      - name: Add webserver to known hosts
+        env:
+          HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST }}
+          HCISTUDIES_PORT: ${{ secrets.HCISTUDIES_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "${HCISTUDIES_PORT}" "${HCISTUDIES_HOST}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Sync project root
+        env:
+          SSHPASS: ${{ secrets.HCISTUDIES_PASSWORD }}
+          HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST }}
+          HCISTUDIES_PORT: ${{ secrets.HCISTUDIES_PORT }}
+          HCISTUDIES_USER: ${{ secrets.HCISTUDIES_USER }}
+          HCISTUDIES_REMOTE_PATH: ${{ secrets.HCISTUDIES_REMOTE_PATH }}
+        run: |
+          set -euo pipefail
+          sshpass -e rsync -az --delete --delete-excluded \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            -e "ssh -p ${HCISTUDIES_PORT}" \
+            ./ \
+            "${HCISTUDIES_USER}@${HCISTUDIES_HOST}:${HCISTUDIES_REMOTE_PATH}"
