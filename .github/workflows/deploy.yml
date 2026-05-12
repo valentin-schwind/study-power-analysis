@@ -14,8 +14,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-latest 
 
     env:
       HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST || vars.HCISTUDIES_HOST }}
