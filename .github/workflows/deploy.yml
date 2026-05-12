@@ -16,24 +16,52 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    env:
+      HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST || vars.HCISTUDIES_HOST }}
+      HCISTUDIES_PASSWORD: ${{ secrets.HCISTUDIES_PASSWORD || vars.HCISTUDIES_PASSWORD }}
+      HCISTUDIES_PORT: ${{ secrets.HCISTUDIES_PORT || vars.HCISTUDIES_PORT }}
+      HCISTUDIES_REMOTE_PATH: ${{ secrets.HCISTUDIES_REMOTE_PATH || vars.HCISTUDIES_REMOTE_PATH }}
+      HCISTUDIES_USER: ${{ secrets.HCISTUDIES_USER || vars.HCISTUDIES_USER }}
+      SSHPASS: ${{ secrets.HCISTUDIES_PASSWORD || vars.HCISTUDIES_PASSWORD }}
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v5
 
       - name: Install deployment tools
-        run: sudo apt-get update && sudo apt-get install -y rsync sshpass
-
-      - name: Add webserver to known hosts
-        env:
-          HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST }}
-          HCISTUDIES_PORT: ${{ secrets.HCISTUDIES_PORT }}
-          HCISTUDIES_USER: ${{ secrets.HCISTUDIES_USER }}
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y rsync sshpass
+
+      - name: Validate deployment configuration
+        run: |
+          set -euo pipefail
+
+          for variable_name in HCISTUDIES_HOST HCISTUDIES_PASSWORD HCISTUDIES_PORT HCISTUDIES_REMOTE_PATH HCISTUDIES_USER; do
+            if [ -z "${!variable_name:-}" ]; then
+              echo "::error::${variable_name} is not configured"
+              exit 1
+            fi
+          done
+
+          deploy_remote_path="${HCISTUDIES_REMOTE_PATH%/}"
+          if [ -z "$deploy_remote_path" ]; then
+            echo "::error::HCISTUDIES_REMOTE_PATH is empty"
+            exit 1
+          fi
+
+          echo "DEPLOY_REMOTE_PATH=$deploy_remote_path" >> "$GITHUB_ENV"
+
+      - name: Add webserver to known hosts
+        run: |
+          set -euo pipefail
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           ssh-keyscan -p "${HCISTUDIES_PORT}" "${HCISTUDIES_HOST}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
           cat > ~/.ssh/config <<EOF
           Host hcistudies-deploy
             HostName ${HCISTUDIES_HOST}
@@ -46,17 +74,16 @@ jobs:
             PasswordAuthentication yes
             PubkeyAuthentication no
           EOF
+
           chmod 600 ~/.ssh/config
 
       - name: Sync project root
-        env:
-          SSHPASS: ${{ secrets.HCISTUDIES_PASSWORD }}
-          HCISTUDIES_REMOTE_PATH: ${{ secrets.HCISTUDIES_REMOTE_PATH }}
         run: |
           set -euo pipefail
-          sshpass -e rsync -az --delete --delete-excluded \
+
+          sshpass -e rsync -az --delete --delete-excluded --mkpath \
             --exclude='.git/' \
             --exclude='.github/' \
             -e "ssh -F $HOME/.ssh/config" \
             ./ \
-            "hcistudies-deploy:${HCISTUDIES_REMOTE_PATH}"
+            "hcistudies-deploy:${DEPLOY_REMOTE_PATH}/"
