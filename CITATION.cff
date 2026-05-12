@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated paper."
+title: "Study Design Planner"
+version: "0.1.1"
+license: MIT
+authors:
+  - family-names: Schwind
+    given-names: Valentin
+    email: mail@vali.de
+repository-code: "https://github.com/valentin-schwind/study-power-analysis"
+url: "https://github.com/valentin-schwind/study-power-analysis"
+preferred-citation:
+  type: conference-paper
+  title: "The HCI User Studies Toolkit: Supporting Study Designing and Planning for Undergraduates and Novice Researchers in Human-Computer Interaction"
+  authors:
+    - family-names: Schwind
+      given-names: Valentin
+    - family-names: Resch
+      given-names: Stefan
+    - family-names: Sehrt
+      given-names: Jessica
+  year: 2023
+  doi: "10.1145/3544549.3585890"
+  url: "https://doi.org/10.1145/3544549.3585890"
+  conference: "Extended Abstracts of the 2023 CHI Conference on Human Factors in Computing Systems"
+  location: "Hamburg, Germany"
+  publisher: "Association for Computing Machinery"
