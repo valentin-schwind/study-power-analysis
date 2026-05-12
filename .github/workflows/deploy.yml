@@ -27,26 +27,36 @@ jobs:
         env:
           HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST }}
           HCISTUDIES_PORT: ${{ secrets.HCISTUDIES_PORT }}
+          HCISTUDIES_USER: ${{ secrets.HCISTUDIES_USER }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           ssh-keyscan -p "${HCISTUDIES_PORT}" "${HCISTUDIES_HOST}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host hcistudies-deploy
+            HostName ${HCISTUDIES_HOST}
+            Port ${HCISTUDIES_PORT}
+            User ${HCISTUDIES_USER}
+            UserKnownHostsFile ${HOME}/.ssh/known_hosts
+            GlobalKnownHostsFile /dev/null
+            StrictHostKeyChecking yes
+            UpdateHostKeys no
+            PasswordAuthentication yes
+            PubkeyAuthentication no
+          EOF
+          chmod 600 ~/.ssh/config
 
       - name: Sync project root
         env:
           SSHPASS: ${{ secrets.HCISTUDIES_PASSWORD }}
-          HCISTUDIES_HOST: ${{ secrets.HCISTUDIES_HOST }}
-          HCISTUDIES_PORT: ${{ secrets.HCISTUDIES_PORT }}
-          HCISTUDIES_USER: ${{ secrets.HCISTUDIES_USER }}
           HCISTUDIES_REMOTE_PATH: ${{ secrets.HCISTUDIES_REMOTE_PATH }}
         run: |
           set -euo pipefail
-          SSH_COMMAND="ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no -p ${HCISTUDIES_PORT}"
           sshpass -e rsync -az --delete --delete-excluded \
             --exclude='.git/' \
             --exclude='.github/' \
-            -e "${SSH_COMMAND}" \
+            -e "ssh -F $HOME/.ssh/config" \
             ./ \
-            "${HCISTUDIES_USER}@${HCISTUDIES_HOST}:${HCISTUDIES_REMOTE_PATH}"
+            "hcistudies-deploy:${HCISTUDIES_REMOTE_PATH}"
