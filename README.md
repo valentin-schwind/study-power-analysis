@@ -1,3 +1,5 @@
+:no_entry: [DEPRECATED] Active at https://github.com/valentin-schwind/study-power-analysis
+
 # Study Design and Power Analysis Planner
 
 Browser-based planning tool for HCI studies with a focus on a-priori power analysis, sample-size planning, study-design guidance, and placeholder data generation.
