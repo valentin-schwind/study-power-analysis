@@ -1904,11 +1904,7 @@
 			return Math.sqrt(variance);
 		};
 		
-		function getHedgesG(delta, sd, N, corr) {   
-			return (1 - getHedgesG(delta, sd, N)) / Math.sqrt(2 * ( 1 - corr)); 
-		}
-		
-		function getCohensD(delta, sd) {    
+		function getCohensD(delta, sd) {
 			return delta / Math.sqrt((sd * sd + sd *sd)/2);
 		} 
 		
