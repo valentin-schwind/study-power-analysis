@@ -304,6 +304,29 @@ h3 {
     overflow-x: auto;
 }
 
+/* Citation box for the toolkit publication reference */
+.citation-box {
+    margin-top: 12px;
+    padding: 14px 16px;
+    border: 1px solid #e5e7eb;
+    border-left: 4px solid #0f766e;
+    border-radius: 10px;
+    background: #f8fafc;
+}
+
+.citation-box strong {
+    display: inline-block;
+    margin-bottom: 6px;
+}
+
+.citation-box code {
+    background: transparent;
+    color: #374151;
+    white-space: normal;
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
 .hidden {
     display: none;
 }
