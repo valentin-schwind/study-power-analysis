@@ -1963,7 +1963,7 @@
 		
 		function interpretPartialEtaSquared(etaSquared) {  
 			if (etaSquared < 0.01) {
-				return 'negligble';
+				return 'negligible';
 			} else if (etaSquared >= 0.01 && etaSquared < 0.06) {
 				return 'small';
 			} else if (etaSquared >= 0.06 && etaSquared < 0.14) {
