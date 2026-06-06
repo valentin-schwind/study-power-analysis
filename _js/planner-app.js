@@ -1581,7 +1581,29 @@
 			let resultStr = ""; 
 			let withinIVs = getItemsInArray(studyDesign.IVs, "within", "within");
 			let betweenIVs = getItemsInArray(studyDesign.IVs, "within", "between");
-			let nominalIVs = getItemsInArray(studyDesign.IVs, "type", "N");   
+			let nominalIVs = getItemsInArray(studyDesign.IVs, "type", "N");
+
+			// Inline cross-reference: pre-fill the Statistical Decision Tree with the parts of this
+			// design we can derive with certainty (others are left for the user to answer there).
+			let decisionTreeHint = "";
+			if(studyDesign.DVs.length > 0 && studyDesign.IVs.length > 0) {
+				let dtParams = [];
+				let dtAdd = function(key, value){ if(value) dtParams.push(key + "=" + value); };
+				dtAdd("dv_count", studyDesign.DVs.length === 1 ? "1" : "ge2");
+				if(studyDesign.DVs.length === 1) {
+					let dvType = studyDesign.DVs[0].type;
+					dtAdd("dv_kind", (dvType === "I" || dvType === "R") ? "continuous" : (dvType === "O" ? "discrete" : ""));
+				}
+				dtAdd("iv_count", studyDesign.IVs.length === 1 ? "1" : "ge2");
+				let ivDiscrete = studyDesign.IVs.some(function(iv){ return iv.type === "N" || iv.type === "O"; });
+				let ivContinuous = studyDesign.IVs.some(function(iv){ return iv.type === "I" || iv.type === "R"; });
+				dtAdd("iv_kind", (ivDiscrete && ivContinuous) ? "both" : (ivContinuous ? "continuous" : (ivDiscrete ? "discrete" : "")));
+				if(ivDiscrete) {
+					dtAdd("design", (withinIVs.length > 0 && betweenIVs.length > 0) ? "both" : (withinIVs.length > 0 ? "within" : (betweenIVs.length > 0 ? "between" : "")));
+				}
+				let dtUrl = "https://hci-studies.org/statistical-decision-tree/" + (dtParams.length ? "?" + dtParams.join("&") : "");
+				decisionTreeHint = '<p class="mb-3"><small>Unsure the test below fits your data? Cross-check this design in the <a href="' + dtUrl + '" target="_blank" rel="noopener noreferrer">Statistical Decision Tree</a>.</small></p>';
+			}
 			
 			if(studyDesign.MANOVA) resultStr += '<div class="accordion-item" id="accordionMANOVA"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMANOVA"  aria-controls="accordionMANOVA"><h6 class="accordion-header">' + getDataTypeIcon("M") + ' Inferential statistics requires a ' + number2words(studyDesign.IVs.length) + '-factorial ' + ((withinIVs.length >= 1 && betweenIVs.length >= 1) ? 'mixed-design ' : ' ') + 'MANOVA</h6></button><div id="collapseMANOVA" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light"><strong>Statistical test:</strong></br><code>model <- manova(cbind(' + getNamesFromArray(studyDesign.DVs, ", ", "name").slice(0, -2) + ') ~ ' + getNamesFromArray(studyDesign.IVs, " * ", "name").slice(0, -2) + ', data = data)<br />summary(model)<br />summary.aov(model)</code></br>for DVs that are significant (p &#8804; .05) you can perform univariate tests (see below)</div></div></div>';
 			
@@ -1744,7 +1766,7 @@
 					resultStr += generateAccordionFooter();  
 				});
 			}
-			$("#results").html("<div class='accordion'>" + resultStr + "</div>");
+			$("#results").html(decisionTreeHint + "<div class='accordion'>" + resultStr + "</div>");
 		} 
 		
 		function arrayToDesignSequence(array, type, num) {
