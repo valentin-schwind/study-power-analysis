@@ -1605,7 +1605,7 @@
 				decisionTreeHint = '<p class="mb-3"><small>Unsure the test below fits your data? Cross-check this design in the <a href="' + dtUrl + '" target="_blank" rel="noopener noreferrer">Statistical Decision Tree</a>.</small></p>';
 			}
 			
-			if(studyDesign.MANOVA) resultStr += '<div class="accordion-item" id="accordionMANOVA"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMANOVA"  aria-controls="accordionMANOVA"><h6 class="accordion-header">' + getDataTypeIcon("M") + ' Inferential statistics requires a ' + number2words(studyDesign.IVs.length) + '-factorial ' + ((withinIVs.length >= 1 && betweenIVs.length >= 1) ? 'mixed-design ' : ' ') + 'MANOVA</h6></button><div id="collapseMANOVA" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light"><strong>Statistical test:</strong></br><code>model <- manova(cbind(' + getNamesFromArray(studyDesign.DVs, ", ", "name").slice(0, -2) + ') ~ ' + getNamesFromArray(studyDesign.IVs, " * ", "name").slice(0, -2) + ', data = data)<br />summary(model)<br />summary.aov(model)</code></br>for DVs that are significant (p &#8804; .05) you can perform univariate tests (see below)</div></div></div>';
+			if(studyDesign.MANOVA) resultStr += '<div class="accordion-item" id="accordionMANOVA"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMANOVA"  aria-controls="accordionMANOVA"><h6 class="accordion-header">' + getDataTypeIcon("M") + ' Inferential statistics requires a ' + number2words(studyDesign.IVs.length) + '-factorial ' + ((withinIVs.length >= 1 && betweenIVs.length >= 1) ? 'mixed-design ' : ' ') + 'MANOVA</h6></button><div id="collapseMANOVA" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light"><strong>Statistical test:</strong></br><code class="code-box">model <- manova(cbind(' + getNamesFromArray(studyDesign.DVs, ", ", "name").slice(0, -2) + ') ~ ' + getNamesFromArray(studyDesign.IVs, " * ", "name").slice(0, -2) + ', data = data)<br />summary(model)<br />summary.aov(model)</code></br>for DVs that are significant (p &#8804; .05) you can perform univariate tests (see below)</div></div></div>';
 			
 			if(studyDesign.DVs.length > 0 && studyDesign.IVs.length > 0) {
 				$.each(studyDesign.DVs, function(i) { 
@@ -1616,12 +1616,12 @@
 					}
 					
 					function generateNormality(text, code, show) {
-						if(show) return '<strong><div class="mt-3">Normality test:</div></strong><div>' + text + '<br /><code>' + code + '</code></div>';
+						if(show) return '<div class="mt-3"><strong>Normality test:</strong></div><div>' + text + '<br /><code class="code-box">' + code + '</code></div>';
 						else return "";
 					}
 					
 					function generateCode(title, text, code) {
-						return '<strong><div class="mt-3">' + title + '</strong><br /></div><div>' + text + '<br /><code light-bg>' + code + '</code></div>';
+						return '<div class="mt-3"><strong>' + title + '</strong></div><div>' + text + '<br /><code class="code-box">' + code + '</code></div>';
 					} 
 					
 					function generateAccordionFooter() {
