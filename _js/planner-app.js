@@ -24,6 +24,7 @@
 				"IVs": [],
 				"DVs": [],
 				"MANOVA": false,
+				"equivalence": false,
 				"betweenIVs": [],
 				"withinIVs": [],
 				"allBetweenLevels": [],
@@ -662,8 +663,9 @@
 			$("select[name='selectIVwithin']").append(new Option('within', "within"));
 			$("select[name='selectIVwithin']").append(new Option('between', "between"));
 			
-			$("input[name='manovaCheckBox']").prop( 'checked', false ); 			
-			
+			$("input[name='manovaCheckBox']").prop( 'checked', false );
+			$("input[name='equivalenceCheckBox']").prop( 'checked', false );
+
 			$("#btnExample2x3Within").click(function() { example2x3Within(); }); 		
 			$("#btnExample2x4Mixed").click(function()  { example2x4Mixed(); }); 		
 			$("#btnExampleRegression").click(function() { exampleRegression(); }); 		
@@ -901,12 +903,9 @@
 				manualUpdate();
 			});
 			
-			/* Not implemented yet */
-			/*
-			$("#equivalenceCheckBox").change(function() { 
-				manualUpdate();  
+			$("#equivalenceCheckBox").change(function() {
+				refreshPlanner();
 			});
-			*/
 
 			$("#meanDeltaInputId").change(function() { 
 				manualUpdate(); 
@@ -1153,8 +1152,13 @@
 					if(studyDesign.IVs[i].levels.length > 2) anIVHasMoreThanTwoLevels = true; 
 				});
 				
-				if(studyDesign.IVs.length == 1 && studyDesign.DVs.length >= 1 && anIVHasMoreThanTwoLevels == false) $("#cellEquivalence").show();
-				else $("#cellEquivalence").hide(); 
+				if(studyDesign.IVs.length == 1 && studyDesign.DVs.length >= 1 && anIVHasMoreThanTwoLevels == false) {
+					$("#cellEquivalence").show();
+				} else {
+					$("#cellEquivalence").hide();
+					$("input[name='equivalenceCheckBox']").prop("checked", false);
+				}
+				studyDesign.equivalence = $("input[name='equivalenceCheckBox']").prop('checked');
 				
 				let studyHasParametricData = false;
 				$.each(studyDesign.DVs, function(i){  
@@ -1606,7 +1610,19 @@
 			}
 			
 			if(studyDesign.MANOVA) resultStr += '<div class="accordion-item" id="accordionMANOVA"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseMANOVA"  aria-controls="accordionMANOVA"><h6 class="accordion-header">' + getDataTypeIcon("M") + ' Inferential statistics requires a ' + number2words(studyDesign.IVs.length) + '-factorial ' + ((withinIVs.length >= 1 && betweenIVs.length >= 1) ? 'mixed-design ' : ' ') + 'MANOVA</h6></button><div id="collapseMANOVA" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light"><strong>Statistical test:</strong></br><code class="code-box">model <- manova(cbind(' + getNamesFromArray(studyDesign.DVs, ", ", "name").slice(0, -2) + ') ~ ' + getNamesFromArray(studyDesign.IVs, " * ", "name").slice(0, -2) + ', data = data)<br />summary(model)<br />summary.aov(model)</code></br>for DVs that are significant (p &#8804; .05) you can perform univariate tests (see below)</div></div></div>';
-			
+
+				if(studyDesign.equivalence) {
+					let eqIV = studyDesign.IVs[0].name;
+					let eqDV = studyDesign.DVs[0].name;
+					let eqPaired = (withinIVs.length >= 1);
+					let eqLevels = (studyDesign.IVs[0].levels && studyDesign.IVs[0].levels.length >= 2) ? studyDesign.IVs[0].levels : ["Level1", "Level2"];
+					let eqCode = eqPaired
+						? 'library(TOSTER)<br /># eqb = your smallest effect size of interest (SESOI); here Cohen\'s dz = 0.5<br />t_TOST(x = data$`' + eqLevels[0] + '`, y = data$`' + eqLevels[1] + '`, paired = TRUE, eqb = 0.5)<br /># plan N for the equivalence test itself:<br />power_t_TOST(power = 0.8, delta = 0, eqb = 0.5, type = "paired")'
+						: 'library(TOSTER)<br /># eqb = your smallest effect size of interest (SESOI); here Cohen\'s d = 0.5<br />t_TOST(formula = ' + eqDV + ' ~ ' + eqIV + ', data = data, eqb = 0.5)<br /># plan N for the equivalence test itself:<br />power_t_TOST(power = 0.8, delta = 0, eqb = 0.5, type = "two.sample")';
+					let eqMulti = (studyDesign.DVs.length > 1) ? ' Repeat for each dependent variable.' : '';
+					resultStr += '<div class="accordion-item" id="accordionEquivalence"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseEquivalence" aria-controls="accordionEquivalence"><h6 class="accordion-header">' + getDataTypeIcon("E") + ' Equivalence test (TOST) to test for the <em>absence</em> of a meaningful difference</h6></button><div id="collapseEquivalence" class="accordion-collapse collapse" aria-labelledby="panelsStayOpen-headingOne"><div class="accordion-body bg-light"><strong>Statistical test:</strong></br><code class="code-box">' + eqCode + '</code></br>A <strong>TOST</strong> (two one-sided tests) procedure tests whether the difference between the two conditions is small enough to be considered practically equivalent &mdash; rather than only failing to reject the null. Set the equivalence bounds (<code>eqb</code>) to your smallest effect size of interest (SESOI).' + eqMulti + ' Based on Lakens, Scheel &amp; Isager (2018), <em>Advances in Methods and Practices in Psychological Science</em>, doi:10.1177/2515245918770963. This is an additional analysis/reporting option and does not change the power analysis shown below.</div></div></div>';
+				}
+
 			if(studyDesign.DVs.length > 0 && studyDesign.IVs.length > 0) {
 				$.each(studyDesign.DVs, function(i) { 
 					let testStr = "";   
@@ -1852,7 +1868,8 @@
 			if(val == "O") return '<i class="bi bi-reception-4 me-1"></i>';
 			if(val == "I") return '<i class="bi bi-rulers me-1"></i>';
 			if(val == "R") return '<i class="bi bi-speedometer me-1"></i>'; 
-			if(val == "M") return '<i class="bi bi-kanban me-1"></i>'; 
+			if(val == "M") return '<i class="bi bi-kanban me-1"></i>';
+			if(val == "E") return '<i class="bi bi-arrows-collapse-vertical me-1"></i>';
 			if(val == "H") return '<i class="bi bi-filter-square-fill me-1"></i>'; 
 		}
 		
@@ -2331,7 +2348,8 @@
 					label: label,
 					data: normalizedCurvePoints.map(function(point) {
 						let match = point.rows.find(function(row) { return row.label === label; });
-						return match ? { x: point.totalParticipants, y: roundTo(match.power * 100, 1) } : null;
+						// Keep x defined (y:null draws a line gap); a bare null element crashes Chart.js' object parser.
+						return { x: point.totalParticipants, y: match ? roundTo(match.power * 100, 1) : null };
 					}),
 					borderColor: palette[index % palette.length],
 					backgroundColor: palette[index % palette.length],
